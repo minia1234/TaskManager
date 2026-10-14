@@ -1,0 +1,89 @@
+using System.Diagnostics;
+using Microsoft.Win32;
+
+namespace TaskMonitor;
+
+internal sealed record StartupRow(string Name, string Command, string Publisher, bool Enabled, RegistryHive Hive);
+
+// 시작 프로그램: Run 키 목록과 StartupApproved 키로 사용 여부를 읽고 바꾼다.
+// 작업 관리자와 같은 방식이다. HKLM을 바꾸려면 관리자 권한이 필요하다.
+internal static class StartupItems
+{
+    private const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string ApprovedPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+
+    internal static List<StartupRow> Enumerate()
+    {
+        var result = new List<StartupRow>();
+        foreach (var hive in new[] { RegistryHive.CurrentUser, RegistryHive.LocalMachine })
+        {
+            using var root = RegistryKey.OpenBaseKey(hive, RegistryView.Default);
+            using var run = root.OpenSubKey(RunPath);
+            using var approved = root.OpenSubKey(ApprovedPath);
+            if (run is null)
+            {
+                continue;
+            }
+
+            foreach (var name in run.GetValueNames())
+            {
+                string command = run.GetValue(name)?.ToString() ?? "";
+                bool enabled = IsEnabled(approved?.GetValue(name) as byte[]);
+                result.Add(new StartupRow(name, command, PublisherOf(command), enabled, hive));
+            }
+        }
+
+        return result.OrderBy(r => r.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+    }
+
+    internal static void SetEnabled(StartupRow row, bool enabled)
+    {
+        using var root = RegistryKey.OpenBaseKey(row.Hive, RegistryView.Default);
+        using var approved = root.CreateSubKey(ApprovedPath, true);
+
+        // 첫 바이트 0x02 = 사용, 0x03 = 사용 안 함. 뒤의 8바이트는 바뀐 시각(FILETIME)이다.
+        var bytes = new byte[12];
+        bytes[0] = enabled ? (byte)0x02 : (byte)0x03;
+        if (!enabled)
+        {
+            BitConverter.GetBytes(DateTime.UtcNow.ToFileTimeUtc()).CopyTo(bytes, 4);
+        }
+
+        approved.SetValue(row.Name, bytes, RegistryValueKind.Binary);
+    }
+
+    // 값이 없으면 사용으로 본다. 첫 바이트의 가장 낮은 비트가 1이면 사용 안 함이다(0x03).
+    private static bool IsEnabled(byte[]? value) => value is null || value.Length == 0 || (value[0] & 0x01) == 0;
+
+    // 명령에서 실행 파일 경로를 뽑는다. 따옴표가 있으면 따옴표 안, 없으면 .exe 까지.
+    internal static string ExtractPath(string command)
+    {
+        command = command.Trim();
+        if (command.StartsWith('"'))
+        {
+            int end = command.IndexOf('"', 1);
+            return end > 1 ? command[1..end] : command.Trim('"');
+        }
+
+        int exe = command.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+        return exe >= 0 ? command[..(exe + 4)] : command;
+    }
+
+    private static string PublisherOf(string command)
+    {
+        string path = ExtractPath(command);
+        if (path.Length == 0)
+        {
+            return "";
+        }
+
+        try
+        {
+            return FileVersionInfo.GetVersionInfo(path).CompanyName ?? "";
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+}
