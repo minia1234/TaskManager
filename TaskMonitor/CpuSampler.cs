@@ -36,7 +36,9 @@ internal sealed record Snapshot(
     IReadOnlyList<ExitedProcess> RecentlyExited,
     int ProcessCount,
     int TotalThreads,
-    int TotalHandles);
+    int TotalHandles,
+    double UserPercent,
+    double KernelPercent);
 
 // 프로세스 1개의 원시 값. CPU 시간과 I/O 바이트는 누적값이다.
 internal readonly record struct ProcessRaw(
@@ -60,7 +62,7 @@ internal sealed class CpuSampler
     private static readonly TimeSpan ExitedKeepTime = TimeSpan.FromSeconds(60);
 
     private readonly record struct PrevProcess(long CpuTime, long IoBytes, string Name, double Percent);
-    private sealed record CpuTimes(long[] Capacity, long[] Idle, long[] Dpc, long[] Interrupt);
+    private sealed record CpuTimes(long[] Capacity, long[] Idle, long[] Dpc, long[] Interrupt, long[] User);
 
     private int _processBufferSize = 0x40000;
     private int _cpuBufferSize;
@@ -106,6 +108,10 @@ internal sealed class CpuSampler
 
         double total = Math.Clamp(Pct(capacity - (Sum(cpu.Idle) - Sum(prev.Idle))), 0, 100);
         double dpcInt = Math.Clamp(Pct((Sum(cpu.Dpc) - Sum(prev.Dpc)) + (Sum(cpu.Interrupt) - Sum(prev.Interrupt))), 0, 100);
+        long userDelta = Sum(cpu.User) - Sum(prev.User);
+        long idleDelta = Sum(cpu.Idle) - Sum(prev.Idle);
+        double userPercent = Math.Clamp(Pct(userDelta), 0, 100);
+        double kernelPercent = Math.Clamp(Pct(capacity - idleDelta - userDelta), 0, 100);
 
         var current = new Dictionary<(int Pid, long CreateTime), PrevProcess>(raws.Count);
         var processes = new List<ProcessUsage>(raws.Count);
@@ -173,7 +179,7 @@ internal sealed class CpuSampler
 
         double unattributed = Math.Max(0, total - sumProcesses - dpcInt);
         return new Snapshot(total, dpcInt, unattributed, _logicalProcessors, perCpu, sorted, groups,
-            _exited.ToList(), processes.Count, totalThreads, totalHandles);
+            _exited.ToList(), processes.Count, totalThreads, totalHandles, userPercent, kernelPercent);
     }
 
     private void Remember(CpuTimes cpu, List<ProcessRaw> raws, long now)
@@ -216,16 +222,18 @@ internal sealed class CpuSampler
             var idle = new long[count];
             var dpc = new long[count];
             var interrupt = new long[count];
+            var user = new long[count];
             for (int i = 0; i < count; i++)
             {
                 IntPtr p = IntPtr.Add(buffer, i * ProcessorPerfEntrySize);
                 idle[i] = Marshal.ReadInt64(p, 0);
-                capacity[i] = Marshal.ReadInt64(p, 8) + Marshal.ReadInt64(p, 16);
+                user[i] = Marshal.ReadInt64(p, 16);
+                capacity[i] = Marshal.ReadInt64(p, 8) + user[i];
                 dpc[i] = Marshal.ReadInt64(p, 24);
                 interrupt[i] = Marshal.ReadInt64(p, 32);
             }
 
-            return new CpuTimes(capacity, idle, dpc, interrupt);
+            return new CpuTimes(capacity, idle, dpc, interrupt, user);
         }
         finally
         {

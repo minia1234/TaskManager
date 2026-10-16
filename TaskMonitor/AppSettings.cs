@@ -12,6 +12,8 @@ internal sealed class AppSettings
     public int ThresholdPercent { get; set; } = 70;
     public bool LogEnabled { get; set; } = true;
     public bool GroupProcesses { get; set; } = true;
+    public string ColorTheme { get; set; } = "light";     // light | dark | system
+    public string Language { get; set; } = "ko";          // ko | en (다음 실행부터 적용)
     public Dictionary<string, List<string>> Columns { get; set; } = new();
 
     private static string FilePath => Path.Combine(

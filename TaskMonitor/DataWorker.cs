@@ -1,0 +1,278 @@
+using System.Diagnostics;
+
+namespace TaskMonitor;
+
+// 백그라운드 데이터 작업자: 프로세스 목록과 표의 행을 만든다. UI 스레드는 완성된 결과(Frame)만 받아서 그린다.
+// 서비스, 시작 프로그램, 사용자 열거는 Windows 서비스 관리자나 네트워크 조회에 따라 오래 걸리거나 막힐 수 있어서
+// 별도 작업으로 돌린다. 그 작업이 막혀도 프로세스와 성능 갱신은 계속된다.
+internal sealed class DataWorker : IDisposable
+{
+    // Rows: 현재 페이지의 최신 행 목록(바뀌지 않았으면 같은 객체). Error: 이번 작업 중 발생한 오류 메시지.
+    internal sealed record Frame(int Page, Snapshot? Snapshot, PerfSnapshot Perf, IReadOnlyList<Row>? Rows, string? Error);
+
+    private static readonly TimeSpan SlowInterval = TimeSpan.FromSeconds(3);
+    private const int SlowStageMs = 300;
+    private const int PageCount = 7;
+
+    private readonly Action<Frame> _publish;
+    private readonly SystemPerf _perf;
+    private readonly CpuSampler _sampler = new();
+    private readonly ProcessInfoCache _info = new();
+    private readonly AutoResetEvent _wake = new(false);
+    private readonly Thread _thread;
+    private readonly object _rowsGate = new();
+    private readonly IReadOnlyList<Row>?[] _rowsByPage = new IReadOnlyList<Row>?[PageCount];
+    private readonly int[] _slowBusy = new int[PageCount];
+    private readonly AppHistory _history = new();
+    private DateTime _lastHistorySave = DateTime.Now;
+
+    private volatile bool _stop;
+    private volatile int _page;
+    private volatile bool _rebuildRequested;
+    private volatile bool _sampleRequested;
+    private volatile int _intervalMs;
+    private volatile bool _grouped;
+    private volatile bool _logEnabled;
+    private volatile int _threshold;
+    private volatile Snapshot? _snapshot;
+    private DateTime _lastSlow = DateTime.MinValue;
+    private volatile string _stage = "대기";
+    private long _stageStarted = Environment.TickCount64;
+
+    public DataWorker(Action<Frame> publish, SystemPerf perf, int page, int intervalMs, bool grouped, bool logEnabled, int threshold)
+    {
+        _publish = publish;
+        _perf = perf;
+        _page = page;
+        _intervalMs = intervalMs;
+        _grouped = grouped;
+        _logEnabled = logEnabled;
+        _threshold = threshold;
+        _thread = new Thread(Run) { IsBackground = true, Name = "TaskMonitor data" };
+    }
+
+    public void Start() => _thread.Start();
+
+    // 멈춤 감시용: 작업 스레드가 지금 어느 단계에 있고, 그 단계에 들어간 지 몇 ms인지
+    public string CurrentStage => _stage;
+    public long StageAgeMs => Environment.TickCount64 - Volatile.Read(ref _stageStarted);
+
+    // 화면 전환: 마지막 샘플로 해당 페이지 행만 새로 만든다(CPU는 다시 재지 않는다).
+    public void RequestPage(int page)
+    {
+        _page = page;
+        _rebuildRequested = true;
+        _wake.Set();
+    }
+
+    // 지금 바로 전체 샘플링 (새로 고침, 작업 직후)
+    public void RequestNow()
+    {
+        _sampleRequested = true;
+        _wake.Set();
+    }
+
+    // 0 이하 = 일시 중지 (화면 전환과 새로 고침으로만 갱신)
+    public void SetInterval(int ms)
+    {
+        _intervalMs = ms;
+        _wake.Set();
+    }
+
+    public void Configure(bool grouped, bool logEnabled, int threshold)
+    {
+        _grouped = grouped;
+        _logEnabled = logEnabled;
+        _threshold = threshold;
+        _rebuildRequested = true;
+        _wake.Set();
+    }
+
+    private void Run()
+    {
+        while (!_stop)
+        {
+            int interval = _intervalMs;
+            bool signaled = _wake.WaitOne(interval > 0 ? interval : Timeout.Infinite);
+            if (_stop)
+            {
+                break;
+            }
+
+            // 주기가 끝났거나 새로 고침을 요청받았을 때만 샘플링한다. 화면 전환 같은 요청은 행만 다시 만든다.
+            bool sample = !signaled || _sampleRequested || _snapshot is null;
+            Build(sample);
+        }
+    }
+
+    private void Build(bool sample)
+    {
+        bool rebuild = _rebuildRequested;
+        bool forceSample = _sampleRequested;
+        _rebuildRequested = false;
+        _sampleRequested = false;
+
+        int page = _page;
+        try
+        {
+            if (sample || forceSample)
+            {
+                var snap = RunStage("CPU 샘플", _sampler.Sample);
+                if (snap is not null)
+                {
+                    _snapshot = snap;
+                    _history.Update(snap.Processes, snap.LogicalProcessors);
+                    if (DateTime.Now - _lastHistorySave >= TimeSpan.FromSeconds(60))
+                    {
+                        _lastHistorySave = DateTime.Now;
+                        _history.Save();
+                    }
+
+                    _info.BeginTick(40);
+                    _info.Prune(snap.Processes.Select(p => (p.Pid, p.CreateTime)));
+                    if (_logEnabled && snap.TotalCpuPercent >= _threshold)
+                    {
+                        RunStage("기록 파일", () => SpikeLog.Append(snap));
+                    }
+
+                    rebuild = true;
+                }
+            }
+
+            var snapshot = _snapshot;
+            var perf = _perf.Latest;
+            if (snapshot is not null)
+            {
+                bool slowDue = forceSample || rebuild || DateTime.Now - _lastSlow >= SlowInterval;
+                switch (page)
+                {
+                    case MainForm.PageProcesses when rebuild || GetRows(page) is null:
+                        SetRows(page, RunStage("프로세스 행", () => RowBuilders.Processes(snapshot, _info, _grouped, perf.GpuByPid)));
+                        break;
+                    case MainForm.PageHistory when rebuild || GetRows(page) is null:
+                        SetRows(page, RunStage("앱 기록 행", () => RowBuilders.History(_history.Snapshot())));
+                        break;
+                    case MainForm.PageDetails when rebuild || GetRows(page) is null:
+                        SetRows(page, RunStage("세부 정보 행", () => RowBuilders.Details(snapshot, _info, perf.GpuByPid)));
+                        break;
+                    case MainForm.PageServices or MainForm.PageStartup or MainForm.PageUsers when slowDue:
+                        StartSlowIfIdle(page);
+                        break;
+                }
+            }
+
+            _publish(new Frame(page, snapshot, perf, GetRows(page), null));
+        }
+        catch (Exception ex)
+        {
+            _publish(new Frame(page, _snapshot, _perf.Latest, GetRows(page), ex.Message));
+        }
+    }
+
+    // 작업 스레드의 한 단계. 이름을 남겨서 멈췄을 때 감시 스레드가 어느 단계인지 알 수 있게 하고,
+    // 오래 걸린 단계는 기록한다.
+    private T RunStage<T>(string name, Func<T> work)
+    {
+        _stage = name;
+        Volatile.Write(ref _stageStarted, Environment.TickCount64);
+        var clock = Stopwatch.StartNew();
+        try
+        {
+            return work();
+        }
+        finally
+        {
+            EndStage(name, clock);
+        }
+    }
+
+    private void RunStage(string name, Action work)
+    {
+        RunStage<bool>(name, () => { work(); return true; });
+    }
+
+    private void EndStage(string name, Stopwatch clock)
+    {
+        long ms = clock.ElapsedMilliseconds;
+        if (ms >= SlowStageMs)
+        {
+            FreezeLog.Write($"작업 스레드 단계 '{name}' {ms}ms");
+        }
+
+        _stage = "대기";
+    }
+
+    // 느린 열거는 한 번에 하나만 돌린다. 이전 작업이 아직 끝나지 않았으면 새로 시작하지 않는다.
+    private void StartSlowIfIdle(int page)
+    {
+        if (Interlocked.CompareExchange(ref _slowBusy[page], 1, 0) != 0)
+        {
+            return;
+        }
+
+        _lastSlow = DateTime.Now;
+        Task.Run(() => RunSlow(page));
+    }
+
+    private void RunSlow(int page)
+    {
+        string? error = null;
+        try
+        {
+            IReadOnlyList<Row> rows = page switch
+            {
+                MainForm.PageServices => RowBuilders.Services(ServiceList.Enumerate()),
+                MainForm.PageStartup => RowBuilders.Startup(StartupItems.Enumerate()),
+                _ => RowBuilders.Users(Sessions.Enumerate()),
+            };
+            SetRows(page, rows);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _slowBusy[page], 0);
+        }
+
+        _publish(new Frame(page, _snapshot, _perf.Latest, GetRows(page), error));
+    }
+
+    private IReadOnlyList<Row>? GetRows(int page)
+    {
+        lock (_rowsGate)
+        {
+            return _rowsByPage[page];
+        }
+    }
+
+    private void SetRows(int page, IReadOnlyList<Row> rows)
+    {
+        lock (_rowsGate)
+        {
+            _rowsByPage[page] = rows;
+        }
+    }
+
+    // 앱 기록을 지운다. 다음 샘플링 때 화면이 빈 목록으로 바뀐다.
+    public void ResetHistory()
+    {
+        _history.Reset();
+        _rebuildRequested = true;
+        _wake.Set();
+    }
+
+    public void Dispose()
+    {
+        _stop = true;
+        _wake.Set();
+        if (_thread.IsAlive)
+        {
+            _thread.Join(2000);
+        }
+
+        _history.Save();
+        _wake.Dispose();
+    }
+}

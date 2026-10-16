@@ -1,35 +1,48 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
 
 namespace TaskMonitor;
 
 // 작업 관리자 메인 창: 메뉴, 왼쪽 탐색, 7개 페이지, 하단 상태 바.
+// 데이터는 DataWorker(백그라운드)가 모으고, 이 창은 결과(Frame)를 받아 그리기만 한다.
+// 오래 걸릴 수 있는 작업(서비스 제어, 덤프, 세션, 셸 열기)은 RunBackground로 UI 스레드 밖에서 실행한다.
 internal sealed class MainForm : Form
 {
-    private const int PageProcesses = 0;
-    private const int PagePerformance = 1;
-    private const int PageHistory = 2;
-    private const int PageStartup = 3;
-    private const int PageUsers = 4;
-    private const int PageDetails = 5;
-    private const int PageServices = 6;
+    internal const int PageProcesses = 0;
+    internal const int PagePerformance = 1;
+    internal const int PageHistory = 2;
+    internal const int PageStartup = 3;
+    internal const int PageUsers = 4;
+    internal const int PageDetails = 5;
+    internal const int PageServices = 6;
+    private const int FreezeThresholdMs = 2000;
+    private const int SlowUiMs = 150;
 
     private static readonly string[] PageTitles = { "프로세스", "성능", "앱 기록", "시작 프로그램", "사용자", "세부 정보", "서비스" };
     private static readonly int[] IntervalMs = { 500, 1000, 4000, 0 };
     private static readonly string[] IntervalNames = { "0.5 초", "1 초", "4 초", "일시 중지" };
-    private static readonly TimeSpan SlowRefresh = TimeSpan.FromSeconds(3);
-    private static readonly Color NavSelected = ColorTranslator.FromHtml("#E0ECF9");
-    private static readonly Color NavNormal = ColorTranslator.FromHtml("#F3F3F3");
-    private static readonly Color TopBarColor = ColorTranslator.FromHtml("#EDF3F8");
-    private static readonly Color StatusBarColor = ColorTranslator.FromHtml("#F3F3F3");
+    private static Color NavSelected => Theme.NavSel;
+    private static Color NavNormal => Theme.Nav;
+    private static Color TopBarColor => Theme.TopBar;
+    private static Color StatusBarColor => Theme.Nav;
     private static readonly Font BodyFont = new("Segoe UI Variable Text", 9F);
 
     private readonly AppSettings _settings = AppSettings.Load();
-    private readonly CpuSampler _sampler = new();
     private readonly SystemPerf _perf = new();
-    private readonly ProcessInfoCache _info = new();
-    private readonly System.Windows.Forms.Timer _timer = new();
+    // 폼 생성자에서는 WinForms 동기화 컨텍스트가 아직 없으므로 Load에서 잡는다.
+    private SynchronizationContext? _ui;
     private readonly NotifyIcon _tray = new();
+    private DataWorker? _worker;
+    private volatile DataWorker.Frame? _pending;
+    private int _posted;
+
+    // 프리징 감시: UI 스레드가 응답하는지 확인하고, 멈추면 진행 중이던 작업을 기록한다.
+    private volatile string _currentWork = "없음";
+    private volatile string _uiStage = "대기";
+    private volatile bool _closing;
+    private long _lastUiBeat = Environment.TickCount64;
+    private int _beatPending;
 
     private readonly GridPage _processes;
     private readonly GridPage _details;
@@ -37,17 +50,25 @@ internal sealed class MainForm : Form
     private readonly GridPage _startup;
     private readonly GridPage _users;
     private readonly PerformancePage _performance = new() { Dock = DockStyle.Fill };
-    private readonly Panel _historyPage = new() { Dock = DockStyle.Fill };
+    private readonly GridPage _historyPage = new(RowBuilders.HistoryColumns, RowBuilders.HistoryColumns.Select(c => c.Key)) { Dock = DockStyle.Fill };
     private readonly Control[] _pages;
     private readonly Button[] _nav = new Button[PageTitles.Length];
+    private readonly IReadOnlyList<Row>?[] _appliedRows = new IReadOnlyList<Row>?[PageTitles.Length];
     private readonly Panel _content = new() { Dock = DockStyle.Fill };
+    private readonly FlowLayoutPanel _navPanel = new() { Dock = DockStyle.Left, FlowDirection = FlowDirection.TopDown, WrapContents = false, Width = 200, Padding = new Padding(4, 6, 4, 0) };
+    private readonly Panel _topBar = new();
+    private readonly Panel _headerPanel = new();
+    private readonly Panel _statusBar = new();
+    private readonly Button _navToggle = new();
+    private readonly FlowLayoutPanel _rateFlow = new() { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+    private readonly Button[] _rateButtons = new Button[IntervalMs.Length];
+    private bool _navOpen = true;
 
     private readonly TextBox _search = new() { Width = 360 };
-    private readonly ComboBox _interval = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 110 };
     private readonly CheckBox _groupCheck = new() { Text = "이름별 합산", AutoSize = true };
     private readonly NumericUpDown _threshold = new() { Minimum = 1, Maximum = 100, Width = 60 };
     private readonly CheckBox _logCheck = new() { Text = "임계치 이상이면 기록", AutoSize = true };
-    private readonly Label _pageTitle = new() { AutoSize = true, Dock = DockStyle.Left, Font = new Font("Segoe UI Variable Display", 16F) };
+    private readonly Label _pageTitle = new() { AutoSize = true, Dock = DockStyle.Left, Font = new Font("Segoe UI Variable Display Semibold", 21F) };
     private readonly Label _status = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight };
     private readonly MenuStrip _menu = new();
 
@@ -71,10 +92,8 @@ internal sealed class MainForm : Form
     private readonly ToolStripButton _uMessage;
 
     private int _currentPage = PageProcesses;
-    private bool _syncing;
     private Snapshot? _last;
-    private PerfSample? _lastPerf;
-    private DateTime _lastSlow = DateTime.MinValue;
+    private PerfSnapshot? _lastPerf;
 
     public MainForm()
     {
@@ -84,7 +103,9 @@ internal sealed class MainForm : Form
         MinimumSize = new Size(960, 600);
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
-        BackColor = Color.White;
+        Theme.Apply(_settings.ColorTheme);
+        Strings.Apply(_settings.Language);
+        BackColor = Theme.Bg;
 
         _processes = new GridPage(RowBuilders.ProcessColumns, ColumnsFor("processes", RowBuilders.DefaultProcessColumns)) { Dock = DockStyle.Fill };
         _details = new GridPage(RowBuilders.DetailColumns, ColumnsFor("details", RowBuilders.DefaultDetailColumns)) { Dock = DockStyle.Fill };
@@ -92,13 +113,6 @@ internal sealed class MainForm : Form
         _startup = new GridPage(RowBuilders.StartupColumns, RowBuilders.StartupColumns.Select(c => c.Key)) { Dock = DockStyle.Fill };
         _users = new GridPage(RowBuilders.UserColumns, RowBuilders.UserColumns.Select(c => c.Key)) { Dock = DockStyle.Fill };
 
-        _historyPage.Controls.Add(new Label
-        {
-            Text = "앱 기록은 Windows 사용 기록(ETW·UWP 데이터)을 읽어야 해서 아직 구현하지 않았습니다.",
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleCenter,
-            Font = BodyFont,
-        });
 
         _pages = new Control[] { _processes, _performance, _historyPage, _startup, _users, _details, _services };
         foreach (var page in _pages)
@@ -123,51 +137,54 @@ internal sealed class MainForm : Form
         AddButton(_processes, "새 작업 실행", NewTask);
         _dEnd = AddButton(_details, "작업 끝내기", () => EndSelected(false));
         _dEco = AddButton(_details, "효율성 모드", () => ToggleEcoSelected(_details));
-        _sStart = AddButton(_services, "시작", () => ServiceAction(s => ServiceList.Start(s.Name)));
-        _sStop = AddButton(_services, "중지", () => ServiceAction(s => ServiceList.Stop(s.Name)));
-        _sRestart = AddButton(_services, "다시 시작", () => ServiceAction(s => ServiceList.Restart(s.Name)));
-        AddButton(_services, "서비스 열기", () => Try(ServiceList.OpenServicesConsole));
+        _sStart = AddButton(_services, "시작", () => ServiceAction("서비스 시작", ServiceList.Start));
+        _sStop = AddButton(_services, "중지", () => ServiceAction("서비스 중지", ServiceList.Stop));
+        _sRestart = AddButton(_services, "다시 시작", () => ServiceAction("서비스 다시 시작", ServiceList.Restart));
+        AddButton(_services, "서비스 열기", () => RunBackground("서비스 관리자 열기", () => Attempt(ServiceList.OpenServicesConsole)));
         _stEnable = AddButton(_startup, "사용", () => StartupAction(st => StartupItems.SetEnabled(st, true)));
         _stDisable = AddButton(_startup, "사용 안 함", () => StartupAction(st => StartupItems.SetEnabled(st, false)));
         AddButton(_startup, "파일 위치 열기", () => StartupAction(st => ProcessActions.OpenFileLocation(StartupItems.ExtractPath(st.Command))));
         _uDisconnect = AddButton(_users, "연결 끊기", () => UserAction("이 사용자의 연결을 끊을까요?", id => Sessions.Disconnect(id)));
         _uLogoff = AddButton(_users, "로그오프", () => UserAction("이 사용자를 로그오프할까요? 저장되지 않은 작업은 잃을 수 있습니다.", id => Sessions.Logoff(id)));
         _uMessage = AddButton(_users, "메시지 보내기", SendUserMessage);
+        AddButton(_historyPage, "기록 지우기", ResetHistory);
 
         BuildHeader();
         BuildStatusBar();
         BuildMenu();
         BuildTray();
 
-        var nav = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Left,
-            Width = 190,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            BackColor = NavNormal,
-            Padding = new Padding(0, 8, 0, 0),
-        };
+        var nav = _navPanel;
+        nav.BackColor = NavNormal;
+        _navToggle.Text = "≡";
+        _navToggle.Size = new Size(40, 36);
+        _navToggle.FlatStyle = FlatStyle.Flat;
+        _navToggle.FlatAppearance.BorderSize = 0;
+        _navToggle.Margin = new Padding(0, 0, 0, 4);
+        _navToggle.Click += (_, _) => SetNavOpen(!_navOpen);
+        nav.Controls.Add(_navToggle);
         for (int i = 0; i < PageTitles.Length; i++)
         {
             int index = i;
             var button = new Button
             {
-                Text = "   " + PageTitles[i],
-                Width = 190,
-                Height = 40,
+                Height = 36,
                 FlatStyle = FlatStyle.Flat,
                 TextAlign = ContentAlignment.MiddleLeft,
                 BackColor = NavNormal,
-                Margin = new Padding(0),
+                Margin = new Padding(0, 0, 0, 2),
             };
             button.FlatAppearance.BorderSize = 0;
             button.Click += (_, _) => ShowPage(index);
             _nav[i] = button;
             nav.Controls.Add(button);
         }
+        SetNavOpen(true);
 
-        var topBar = new Panel { Dock = DockStyle.Top, Height = 44, BackColor = TopBarColor };
+        var topBar = _topBar;
+        topBar.Dock = DockStyle.Top;
+        topBar.Height = 44;
+        topBar.BackColor = TopBarColor;
         var appTitle = new Label { Text = "작업 관리자", AutoSize = true, Left = 16, Top = 13, Font = BodyFont };
         var searchLabel = new Label { Text = "검색", AutoSize = true, Top = 13, Font = BodyFont };
         topBar.Controls.Add(appTitle);
@@ -181,17 +198,25 @@ internal sealed class MainForm : Form
         };
         _search.TextChanged += (_, _) => ApplyFilter();
 
-        var header = new Panel { Dock = DockStyle.Top, Height = 56, Padding = new Padding(16, 8, 16, 8) };
+        var header = _headerPanel;
+        header.Dock = DockStyle.Top;
+        header.Height = 52;
+        header.Padding = new Padding(20, 8, 20, 8);
+        header.BackColor = Theme.Bg;
         var headerRight = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
         headerRight.Controls.Add(_groupCheck);
-        headerRight.Controls.Add(_interval);
+        headerRight.Controls.Add(_rateFlow);
         headerRight.Controls.Add(new Label { Text = "갱신 주기", AutoSize = true, Padding = new Padding(0, 5, 8, 0) });
         header.Controls.Add(headerRight);
         header.Controls.Add(_pageTitle);
 
-        var statusBar = new Panel { Dock = DockStyle.Bottom, Height = 34, BackColor = StatusBarColor, Padding = new Padding(8, 4, 8, 0) };
+        var statusBar = _statusBar;
+        statusBar.Dock = DockStyle.Bottom;
+        statusBar.Height = 34;
+        statusBar.BackColor = StatusBarColor;
+        statusBar.Padding = new Padding(8, 4, 8, 0);
         var thresholdFlow = new FlowLayoutPanel { Dock = DockStyle.Left, AutoSize = true, WrapContents = false };
-        thresholdFlow.Controls.Add(new Label { Text = "기록 임계치(%)", AutoSize = true, Padding = new Padding(0, 5, 4, 0) });
+        thresholdFlow.Controls.Add(new Label { Text = "기록 임계치(%)", AutoSize = true, Font = BodyFont, Padding = new Padding(0, 5, 4, 0) });
         thresholdFlow.Controls.Add(_threshold);
         thresholdFlow.Controls.Add(_logCheck);
         statusBar.Controls.Add(_status);
@@ -205,16 +230,18 @@ internal sealed class MainForm : Form
         Controls.Add(topBar);
         Controls.Add(_menu);
         MainMenuStrip = _menu;
+        ApplyTheme();
 
-        _timer.Tick += (_, _) => OnTick();
         Load += (_, _) =>
         {
+            _ui = SynchronizationContext.Current;
             _perf.Start();
-            OnTick();
-            if (_settings.UpdateIntervalMs > 0)
-            {
-                _timer.Start();
-            }
+            DiskHealthMonitor.Start();
+            GpuDetailMonitor.Start();
+            _worker = new DataWorker(Publish, _perf, _currentPage, _settings.UpdateIntervalMs,
+                _settings.GroupProcesses, _settings.LogEnabled, _settings.ThresholdPercent);
+            _worker.Start();
+            StartWatchdog();
         };
         Resize += (_, _) =>
         {
@@ -225,8 +252,9 @@ internal sealed class MainForm : Form
         };
         FormClosing += (_, _) =>
         {
+            _closing = true;
             _settings.Save();
-            _timer.Stop();
+            _worker?.Dispose();
             _tray.Visible = false;
         };
         FormClosed += (_, _) =>
@@ -238,12 +266,12 @@ internal sealed class MainForm : Form
         {
             if (e.KeyCode == Keys.F5)
             {
-                _lastSlow = DateTime.MinValue;
-                OnTick();
+                _worker?.RequestNow();
                 e.Handled = true;
             }
         };
 
+        _status.Text = "데이터 수집 중...";
         ShowPage(PageProcesses);
         SetInterval(_settings.UpdateIntervalMs, save: false);
     }
@@ -255,7 +283,7 @@ internal sealed class MainForm : Form
 
     private static ToolStripButton AddButton(GridPage page, string text, Action action)
     {
-        var button = new ToolStripButton(text);
+        var button = new ToolStripButton(Strings.Localize(text));
         button.Click += (_, _) => action();
         page.Toolbar.Items.Add(button);
         return button;
@@ -269,17 +297,25 @@ internal sealed class MainForm : Form
             _groupMenu.Checked = _groupCheck.Checked;
             _settings.GroupProcesses = _groupCheck.Checked;
             _settings.Save();
-            RefreshCurrentPage();
+            ApplyWorkerConfig();
         };
 
-        _interval.Items.AddRange(IntervalNames);
-        _interval.SelectedIndexChanged += (_, _) =>
+        for (int i = 0; i < IntervalMs.Length; i++)
         {
-            if (!_syncing && _interval.SelectedIndex >= 0)
+            int index = i;
+            var button = new Button
             {
-                SetInterval(IntervalMs[_interval.SelectedIndex]);
-            }
-        };
+                Text = IntervalNames[i],
+                AutoSize = true,
+                FlatStyle = FlatStyle.Flat,
+                Margin = new Padding(0),
+                Padding = new Padding(6, 1, 6, 1),
+            };
+            button.FlatAppearance.BorderSize = 1;
+            button.Click += (_, _) => SetInterval(IntervalMs[index]);
+            _rateButtons[i] = button;
+            _rateFlow.Controls.Add(button);
+        }
     }
 
     private void BuildStatusBar()
@@ -289,6 +325,7 @@ internal sealed class MainForm : Form
         {
             _settings.ThresholdPercent = (int)_threshold.Value;
             _settings.Save();
+            ApplyWorkerConfig();
         };
 
         _logCheck.Checked = _settings.LogEnabled;
@@ -296,13 +333,24 @@ internal sealed class MainForm : Form
         {
             _settings.LogEnabled = _logCheck.Checked;
             _settings.Save();
+            ApplyWorkerConfig();
         };
+    }
+
+    private void ApplyWorkerConfig()
+    {
+        _worker?.Configure(_settings.GroupProcesses, _settings.LogEnabled, _settings.ThresholdPercent);
     }
 
     private void BuildMenu()
     {
         var file = new ToolStripMenuItem("파일");
         file.DropDownItems.Add(Item("새 작업 실행...", NewTask, Keys.Control | Keys.N));
+        file.DropDownItems.Add(new ToolStripSeparator());
+        bool elevated = IsElevated();
+        var elevate = Item(elevated ? "관리자 권한으로 실행 중" : "관리자 권한으로 다시 실행", RestartAsAdministrator);
+        elevate.Enabled = !elevated;
+        file.DropDownItems.Add(elevate);
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(Item("종료", Close));
 
@@ -343,12 +391,28 @@ internal sealed class MainForm : Form
 
         options.DropDownItems.Add(speed);
 
-        var view = new ToolStripMenuItem("보기");
-        view.DropDownItems.Add(Item("새로 고침", () =>
+        var themeMenu = new ToolStripMenuItem("테마");
+        foreach (var (mode, label) in new[] { ("light", "밝게"), ("dark", "어둡게"), ("system", "시스템 설정 따름") })
         {
-            _lastSlow = DateTime.MinValue;
-            OnTick();
-        }, Keys.F5));
+            var item = Item(label, () => SetColorTheme(mode));
+            item.Checked = _settings.ColorTheme == mode;
+            themeMenu.DropDownItems.Add(item);
+        }
+
+        options.DropDownItems.Add(themeMenu);
+
+        var languageMenu = new ToolStripMenuItem(Strings.Localize("언어"));
+        foreach (var (code, label) in new[] { ("ko", "한국어"), ("en", "English") })
+        {
+            var item = Item(label, () => SetLanguage(code));
+            item.Checked = _settings.Language == code;
+            languageMenu.DropDownItems.Add(item);
+        }
+
+        options.DropDownItems.Add(languageMenu);
+
+        var view = new ToolStripMenuItem("보기");
+        view.DropDownItems.Add(Item("새로 고침", () => _worker?.RequestNow(), Keys.F5));
         view.DropDownItems.Add(Item("열 선택...", ChooseColumns));
         view.DropDownItems.Add(new ToolStripSeparator());
         view.DropDownItems.Add(Item("모두 펼치기", () => _processes.ExpandAll(true)));
@@ -395,6 +459,169 @@ internal sealed class MainForm : Form
         _tray.Visible = false;
     }
 
+    // 탐색 막대를 펼치거나 접는다. 접으면 메뉴 글자 한 자만 보인다.
+    private void SetNavOpen(bool open)
+    {
+        _navOpen = open;
+        _navPanel.Width = open ? 200 : 50;
+        for (int i = 0; i < _nav.Length; i++)
+        {
+            _nav[i].Width = open ? 192 : 42;
+            string title = Strings.Localize(PageTitles[i]);
+            _nav[i].Text = open ? "   " + title : title[..1];
+        }
+    }
+
+    // 갱신 주기 선택 버튼: 고른 칸만 강조한다.
+    private void UpdateRateButtons(int index)
+    {
+        for (int i = 0; i < _rateButtons.Length; i++)
+        {
+            bool selected = i == index;
+            _rateButtons[i].BackColor = selected ? Theme.Accent : Theme.Bg;
+            _rateButtons[i].ForeColor = selected ? Theme.Bg : Theme.Fg;
+            _rateButtons[i].FlatAppearance.BorderColor = Theme.Border;
+        }
+    }
+
+    // 테마를 바꾼 뒤 이미 만든 화면 요소의 색을 다시 맞춘다.
+    private void ApplyTheme()
+    {
+        BackColor = Theme.Bg;
+        Theme.ApplyTextColors(this);
+        TranslateTree(this);
+        _topBar.BackColor = TopBarColor;
+        _headerPanel.BackColor = Theme.Bg;
+        _statusBar.BackColor = StatusBarColor;
+        _navPanel.BackColor = NavNormal;
+        _content.BackColor = Theme.Bg;
+        _menu.BackColor = Theme.TopBar;
+        _menu.ForeColor = Theme.Fg;
+        _search.BackColor = Theme.Input;
+        _search.ForeColor = Theme.Fg;
+        _pageTitle.ForeColor = Theme.Fg;
+        _status.ForeColor = Theme.Fg2;
+        _navToggle.ForeColor = Theme.Fg;
+        _navToggle.BackColor = NavNormal;
+        foreach (var page in _pages)
+        {
+            page.BackColor = Theme.Bg;
+            if (page is GridPage grid)
+            {
+                grid.Toolbar.BackColor = Theme.Bg;
+                foreach (ToolStripItem item in grid.Toolbar.Items)
+                {
+                    item.ForeColor = Theme.Fg;
+                }
+            }
+        }
+
+        for (int i = 0; i < _nav.Length; i++)
+        {
+            _nav[i].BackColor = i == _currentPage ? NavSelected : NavNormal;
+            _nav[i].ForeColor = Theme.Fg;
+        }
+
+        int rate = Array.IndexOf(IntervalMs, _settings.UpdateIntervalMs);
+        UpdateRateButtons(rate >= 0 ? rate : 1);
+        Invalidate(true);
+    }
+
+    // 현재 프로세스가 관리자 권한으로 실행 중인지 확인한다(UAC로 올라간 토큰이면 true).
+    internal static bool IsElevated()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        return new System.Security.Principal.WindowsPrincipal(identity)
+            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+    }
+
+    // UAC 확인 창을 띄워 이 앱을 관리자 권한으로 다시 실행한다. 승인하면 현재 창을 닫는다.
+    // 사용자가 UAC 창에서 취소하면 아무 일도 하지 않는다.
+    private void RestartAsAdministrator()
+    {
+        var start = new ProcessStartInfo(Environment.ProcessPath!)
+        {
+            UseShellExecute = true,
+            Verb = "runas",
+        };
+        try
+        {
+            Process.Start(start);
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "관리자 권한으로 다시 실행", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        Close();
+    }
+
+    // 언어는 컨트롤을 만들 때 문구를 고르므로 다음 실행부터 적용된다.
+    private void SetLanguage(string code)
+    {
+        _settings.Language = code;
+        _settings.Save();
+        MessageBox.Show(this, Strings.Localize("언어는 다시 시작하면 적용됩니다."), "TaskMonitor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void ResetHistory()
+    {
+        var answer = MessageBox.Show(this, Strings.Localize("앱 기록을 모두 지울까요?"), Strings.Localize("기록 지우기"),
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (answer == DialogResult.Yes)
+        {
+            _worker?.ResetHistory();
+        }
+    }
+
+    // 이미 만든 화면 요소(폼, 라벨, 단추, 체크 상자, 메뉴, 도구 모음)의 문구를 현재 언어로 바꾼다.
+    private static void TranslateTree(Control root)
+    {
+        if (root is Form or Label or ButtonBase or CheckBox or GroupBox)
+        {
+            root.Text = Strings.Localize(root.Text);
+        }
+
+        if (root is ToolStrip strip)
+        {
+            TranslateItems(strip.Items);
+        }
+
+        foreach (Control child in root.Controls)
+        {
+            TranslateTree(child);
+        }
+    }
+
+    private static void TranslateItems(ToolStripItemCollection items)
+    {
+        foreach (ToolStripItem item in items)
+        {
+            if (!string.IsNullOrEmpty(item.Text))
+            {
+                item.Text = Strings.Localize(item.Text);
+            }
+
+            if (item is ToolStripMenuItem menu)
+            {
+                TranslateItems(menu.DropDownItems);
+            }
+        }
+    }
+
+    private void SetColorTheme(string mode)
+    {
+        _settings.ColorTheme = mode;
+        _settings.Save();
+        Theme.Apply(mode);
+        ApplyTheme();
+    }
+
     private void ShowPage(int index)
     {
         _currentPage = index;
@@ -408,25 +635,16 @@ internal sealed class MainForm : Form
             _nav[i].BackColor = i == index ? NavSelected : NavNormal;
         }
 
-        _pageTitle.Text = PageTitles[index];
+        _pageTitle.Text = Strings.Localize(PageTitles[index]);
         _groupCheck.Visible = index == PageProcesses;
-        _lastSlow = DateTime.MinValue;
         UpdateToolbarState();
-        RefreshCurrentPage();
+        _worker?.RequestPage(index);
     }
 
     private void SetInterval(int ms, bool save = true)
     {
         _settings.UpdateIntervalMs = ms;
-        _timer.Stop();
-        if (ms > 0)
-        {
-            _timer.Interval = ms;
-            if (IsHandleCreated)
-            {
-                _timer.Start();
-            }
-        }
+        _worker?.SetInterval(ms);
 
         int index = Array.IndexOf(IntervalMs, ms);
         if (index < 0)
@@ -434,97 +652,92 @@ internal sealed class MainForm : Form
             index = 1;
         }
 
-        _syncing = true;
-        _interval.SelectedIndex = index;
+        UpdateRateButtons(index);
         for (int i = 0; i < _intervalMenu.Length; i++)
         {
             _intervalMenu[i].Checked = i == index;
         }
 
-        _syncing = false;
         if (save)
         {
             _settings.Save();
         }
     }
 
-    private void OnTick()
+    // 백그라운드 스레드가 호출한다. 결과가 여러 개 쌓였으면 가장 최근 것만 그린다.
+    private void Publish(DataWorker.Frame frame)
     {
-        try
+        _pending = frame;
+        if (Interlocked.Exchange(ref _posted, 1) == 0)
         {
-            var snap = _sampler.Sample();
-            var perf = _perf.Latest;
-            _lastPerf = perf;
-            if (snap is null)
+            _ui?.Post(_ =>
             {
-                _status.Text = "기준점 수집 중... 다음 갱신부터 표시됩니다.";
-                return;
-            }
-
-            _last = snap;
-            _info.BeginTick(40);
-            _info.Prune(snap.Processes.Select(p => (p.Pid, p.CreateTime)));
-            _performance.Update(snap, perf);
-
-            if (_settings.LogEnabled && snap.TotalCpuPercent >= _settings.ThresholdPercent)
-            {
-                SpikeLog.Append(snap);
-            }
-
-            RefreshCurrentPage();
-            if (DateTime.Now - _lastSlow >= SlowRefresh)
-            {
-                _lastSlow = DateTime.Now;
-                RefreshSlowPages();
-            }
-
-            _status.Text = $"마지막 갱신 {DateTime.Now:HH:mm:ss}   |   프로세스 {snap.ProcessCount}개   |   기록 파일: {SpikeLog.FilePath}";
-        }
-        catch (Exception ex)
-        {
-            _status.Text = $"오류: {ex.Message}";
+                Interlocked.Exchange(ref _posted, 0);
+                if (_pending is { } latest)
+                {
+                    ApplyFrame(latest);
+                }
+            }, null);
         }
     }
 
-    // 자주 바뀌는 페이지(프로세스, 세부 정보)는 매 틱 다시 그린다.
-    private void RefreshCurrentPage()
+    // UI 스레드: 결과를 화면에 반영한다. 여기서는 무거운 계산을 하지 않는다.
+    private void ApplyFrame(DataWorker.Frame frame)
     {
-        if (_last is null)
+        if (IsDisposed)
         {
             return;
         }
 
-        if (_currentPage == PageProcesses)
+        if (frame.Error is not null)
         {
-            _processes.SetRows(RowBuilders.Processes(_last, _info, _settings.GroupProcesses));
-            UpdateBigHeaders();
+            _status.Text = $"오류: {frame.Error}";
+            return;
         }
-        else if (_currentPage == PageDetails)
+
+        if (frame.Snapshot is { } snap)
         {
-            _details.SetRows(RowBuilders.Details(_last, _info));
+            _last = snap;
+            _lastPerf = frame.Perf;
+            UiStep("화면 반영: 성능", () => _performance.Update(snap, frame.Perf));
+            _status.Text = Strings.Fmt("마지막 갱신 {0}   |   프로세스 {1}개   |   기록 파일: {2}", DateTime.Now.ToString("HH:mm:ss"), snap.ProcessCount, SpikeLog.FilePath);
+            if (_currentPage == PageProcesses)
+            {
+                UpdateBigHeaders();
+            }
+        }
+
+        if (frame.Page == _currentPage && frame.Rows is { } rows && !ReferenceEquals(rows, _appliedRows[frame.Page]))
+        {
+            _appliedRows[frame.Page] = rows;
+            UiStep("화면 반영: 표", () => GridFor(frame.Page)?.SetRows(rows));
         }
     }
 
-    // 서비스, 시작 프로그램, 사용자는 열거 비용이 있어서 3초마다 다시 읽는다.
-    private void RefreshSlowPages()
+    // UI 스레드의 한 단계. 감시 스레드가 멈춘 단계를 알 수 있게 이름을 남기고, 오래 걸리면 기록한다.
+    private void UiStep(string name, Action work)
     {
-        switch (_currentPage)
+        _uiStage = name;
+        var clock = Stopwatch.StartNew();
+        work();
+        if (clock.ElapsedMilliseconds >= SlowUiMs)
         {
-            case PageServices:
-                _services.SetRows(RowBuilders.Services(ServiceList.Enumerate()));
-                break;
-            case PageStartup:
-                RefreshStartup();
-                break;
-            case PageUsers:
-                RefreshUsers();
-                break;
+            FreezeLog.Write($"UI 단계 '{name}' {clock.ElapsedMilliseconds}ms");
         }
+
+        _uiStage = "대기";
     }
 
-    private void RefreshStartup() => _startup.SetRows(RowBuilders.Startup(StartupItems.Enumerate()));
-
-    private void RefreshUsers() => _users.SetRows(RowBuilders.Users(Sessions.Enumerate()));
+    private GridPage? GridFor(int page) => page switch
+    {
+        PageProcesses => _processes,
+        PageDetails => _details,
+        PageHistory => _historyPage,
+        PageServices => _services,
+        PageStartup => _startup,
+        PageUsers => _users,
+        _ => null,
+    };
 
     private void UpdateBigHeaders()
     {
@@ -536,9 +749,7 @@ internal sealed class MainForm : Form
         var cpuColor = _last.TotalCpuPercent >= _settings.ThresholdPercent ? Color.Firebrick : Color.Black;
         _processes.SetBig("cpu", $"{_last.TotalCpuPercent:F0}%", cpuColor);
 
-        double memory = _lastPerf is { TotalMemoryBytes: > 0 } p
-            ? 100.0 * (p.TotalMemoryBytes - p.AvailableMemoryBytes) / p.TotalMemoryBytes
-            : 0;
+        double memory = _lastPerf is { Memory.Total: > 0 } p ? 100.0 * p.Memory.Used / p.Memory.Total : 0;
         _processes.SetBig("memory", $"{memory:F0}%", Color.Black);
     }
 
@@ -609,7 +820,8 @@ internal sealed class MainForm : Form
         var current = SafeGet<PriorityLevel?>(() => ProcessActions.GetPriority(first.Pid), null);
         foreach (var level in Enum.GetValues<PriorityLevel>())
         {
-            var item = Item(ProcessActions.PriorityName(level), () => ForEachMember(target, m => ProcessActions.SetPriority(m.Pid, level)));
+            var item = Item(ProcessActions.PriorityName(level), () =>
+                RunBackground("우선 순위 변경", () => CollectErrors(target, m => ProcessActions.SetPriority(m.Pid, level))));
             item.Checked = current == level;
             priority.DropDownItems.Add(item);
         }
@@ -618,9 +830,9 @@ internal sealed class MainForm : Form
         menu.Items.Add(Item("선호도 설정...", () => ChangeAffinity(target)));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(Item("덤프 파일 만들기", () => DumpTarget(target)));
-        menu.Items.Add(Item("파일 위치 열기", () => Try(() => ProcessActions.OpenFileLocation(ProcessInfoCache.PathOf(first.Pid)))));
-        menu.Items.Add(Item("온라인 검색", () => Try(() => ProcessActions.SearchOnline(target.Name))));
-        menu.Items.Add(Item("속성", () => Try(() => ProcessActions.ShowProperties(ProcessInfoCache.PathOf(first.Pid)))));
+        menu.Items.Add(Item("파일 위치 열기", () => RunBackground("파일 위치 열기", () => Attempt(() => ProcessActions.OpenFileLocation(ProcessInfoCache.PathOf(first.Pid))))));
+        menu.Items.Add(Item("온라인 검색", () => RunBackground("온라인 검색", () => Attempt(() => ProcessActions.SearchOnline(target.Name)))));
+        menu.Items.Add(Item("속성", () => RunBackground("속성 열기", () => Attempt(() => ProcessActions.ShowProperties(ProcessInfoCache.PathOf(first.Pid))))));
 
         if (!target.IsGroup)
         {
@@ -634,13 +846,13 @@ internal sealed class MainForm : Form
     private ContextMenuStrip BuildServiceMenu(ServiceRow service)
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add(Item("시작", () => ServiceAction(_ => ServiceList.Start(service.Name), service)));
-        menu.Items.Add(Item("중지", () => ServiceAction(_ => ServiceList.Stop(service.Name), service)));
-        menu.Items.Add(Item("다시 시작", () => ServiceAction(_ => ServiceList.Restart(service.Name), service)));
+        menu.Items.Add(Item("시작", () => ServiceAction("서비스 시작", ServiceList.Start, service)));
+        menu.Items.Add(Item("중지", () => ServiceAction("서비스 중지", ServiceList.Stop, service)));
+        menu.Items.Add(Item("다시 시작", () => ServiceAction("서비스 다시 시작", ServiceList.Restart, service)));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(Item("온라인 검색", () => Try(() => ProcessActions.SearchOnline(
-            service.DisplayName.Length > 0 ? service.DisplayName : service.Name))));
-        menu.Items.Add(Item("서비스 열기", () => Try(ServiceList.OpenServicesConsole)));
+        menu.Items.Add(Item("온라인 검색", () => RunBackground("온라인 검색", () => Attempt(() => ProcessActions.SearchOnline(
+            service.DisplayName.Length > 0 ? service.DisplayName : service.Name)))));
+        menu.Items.Add(Item("서비스 열기", () => RunBackground("서비스 관리자 열기", () => Attempt(ServiceList.OpenServicesConsole))));
         if (service.ProcessId > 0)
         {
             menu.Items.Add(new ToolStripSeparator());
@@ -655,9 +867,9 @@ internal sealed class MainForm : Form
         var menu = new ContextMenuStrip();
         menu.Items.Add(Item(startup.Enabled ? "사용 안 함" : "사용", () => StartupAction(st => StartupItems.SetEnabled(st, !startup.Enabled), startup)));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(Item("파일 위치 열기", () => Try(() => ProcessActions.OpenFileLocation(StartupItems.ExtractPath(startup.Command)))));
-        menu.Items.Add(Item("속성", () => Try(() => ProcessActions.ShowProperties(StartupItems.ExtractPath(startup.Command)))));
-        menu.Items.Add(Item("온라인 검색", () => Try(() => ProcessActions.SearchOnline(startup.Name))));
+        menu.Items.Add(Item("파일 위치 열기", () => RunBackground("파일 위치 열기", () => Attempt(() => ProcessActions.OpenFileLocation(StartupItems.ExtractPath(startup.Command))))));
+        menu.Items.Add(Item("속성", () => RunBackground("속성 열기", () => Attempt(() => ProcessActions.ShowProperties(StartupItems.ExtractPath(startup.Command))))));
+        menu.Items.Add(Item("온라인 검색", () => RunBackground("온라인 검색", () => Attempt(() => ProcessActions.SearchOnline(startup.Name)))));
         return menu;
     }
 
@@ -694,22 +906,22 @@ internal sealed class MainForm : Form
 
         if (!tree)
         {
-            ForEachMember(target, m => ProcessActions.EndTask(m.Pid));
+            RunBackground(title, () => CollectErrors(target, m => ProcessActions.EndTask(m.Pid)));
             return;
         }
 
-        IReadOnlyList<ProcessUsage> all = _last?.Processes ?? Array.Empty<ProcessUsage>();
-        int failed = 0;
-        foreach (var member in target.Members)
+        // 트리 끝내기는 자식까지 찾아야 하므로, 지금 보고 있는 목록을 복사해서 넘긴다.
+        IReadOnlyList<ProcessUsage> all = (_last?.Processes ?? Array.Empty<ProcessUsage>()).ToList();
+        RunBackground(title, () =>
         {
-            failed += ProcessActions.EndTree(member.Pid, all);
-        }
+            int failed = 0;
+            foreach (var member in target.Members)
+            {
+                failed += ProcessActions.EndTree(member.Pid, all);
+            }
 
-        if (failed > 0)
-        {
-            MessageBox.Show(this, $"{failed}개 프로세스는 끝내지 못했습니다(권한 부족 또는 이미 종료됨).", title,
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
+            return failed > 0 ? $"{failed}개 프로세스는 끝내지 못했습니다(권한 부족 또는 이미 종료됨)." : null;
+        });
     }
 
     private void ToggleEcoSelected(GridPage page)
@@ -723,8 +935,11 @@ internal sealed class MainForm : Form
 
     private void ToggleEco(ProcTarget target)
     {
-        bool current = SafeGet(() => ProcessActions.IsEfficiencyMode(target.Members[0].Pid), false);
-        ForEachMember(target, m => ProcessActions.SetEfficiencyMode(m.Pid, !current));
+        RunBackground("효율성 모드 변경", () =>
+        {
+            bool current = SafeGet(() => ProcessActions.IsEfficiencyMode(target.Members[0].Pid), false);
+            return CollectErrors(target, m => ProcessActions.SetEfficiencyMode(m.Pid, !current));
+        });
     }
 
     private void ChangeAffinity(ProcTarget target)
@@ -744,37 +959,47 @@ internal sealed class MainForm : Form
         ulong? mask = Dialogs.Affinity(this, Environment.ProcessorCount, current);
         if (mask is { } chosen)
         {
-            ForEachMember(target, m => ProcessActions.SetAffinity(m.Pid, chosen));
+            RunBackground("선호도 변경", () => CollectErrors(target, m => ProcessActions.SetAffinity(m.Pid, chosen)));
         }
     }
 
+    // 덤프는 큰 프로세스에서 수 초~수십 초 걸린다. 백그라운드에서 쓰고, 끝나면 폴더를 열지 묻는다.
     private void DumpTarget(ProcTarget target)
     {
         var first = target.Members[0];
-        Try(() =>
+        string? path = null;
+        RunBackground("덤프 파일 만들기", () =>
         {
-            string path = ProcessActions.WriteDump(first.Pid, first.Name);
+            path = ProcessActions.WriteDump(first.Pid, first.Name);
+            return null;
+        }, () =>
+        {
+            if (path is null)
+            {
+                return;
+            }
+
             var answer = MessageBox.Show(this,
                 $"덤프 파일을 저장했습니다.{Environment.NewLine}{path}{Environment.NewLine}{Environment.NewLine}폴더를 열까요?",
                 "덤프 파일 만들기", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
             if (answer == DialogResult.Yes)
             {
-                ProcessActions.OpenFileLocation(path);
+                RunBackground("파일 위치 열기", () => Attempt(() => ProcessActions.OpenFileLocation(path)));
             }
         });
     }
 
+    // ShowWindow는 응답 없는 창을 가진 프로세스에서 호출한 쪽을 막을 수 있어서 백그라운드에서 한다.
     private void SwitchTo(int pid)
     {
-        Try(() =>
+        RunBackground("창으로 전환", () => Attempt(() =>
         {
             if (!ProcessActions.SwitchTo(pid))
             {
-                MessageBox.Show(this, "이 프로세스에서 보이는 창을 찾지 못했습니다.", "창으로 전환",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
+                throw new InvalidOperationException("이 프로세스에서 보이는 창을 찾지 못했습니다.");
             }
-
+        }), () =>
+        {
             if (_settings.MinimizeOnUse)
             {
                 WindowState = FormWindowState.Minimized;
@@ -793,11 +1018,11 @@ internal sealed class MainForm : Form
         var run = Dialogs.RunNewTask(this);
         if (run is { } task)
         {
-            Try(() => ProcessActions.RunNewTask(task.Command, task.Admin));
+            RunBackground("새 작업 실행", () => Attempt(() => ProcessActions.RunNewTask(task.Command, task.Admin)));
         }
     }
 
-    private void ServiceAction(Action<ServiceRow> action, ServiceRow? row = null)
+    private void ServiceAction(string title, Action<string> action, ServiceRow? row = null)
     {
         var service = row ?? _services.SelectedRow?.Tag as ServiceRow;
         if (service is null)
@@ -805,8 +1030,8 @@ internal sealed class MainForm : Form
             return;
         }
 
-        Try(() => action(service));
-        RefreshSlowPagesNow();
+        // 서비스 시작과 중지는 몇 초에서 최대 15초까지 걸릴 수 있다. UI 스레드에서 기다리면 화면이 멈춘다.
+        RunBackground(title, () => Attempt(() => action(service.Name)), () => { });
     }
 
     private void StartupAction(Action<StartupRow> action, StartupRow? row = null)
@@ -817,8 +1042,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        Try(() => action(startup));
-        RefreshStartup();
+        RunBackground("시작 프로그램 변경", () => Attempt(() => action(startup)));
     }
 
     private void UserAction(string question, Action<int> action, SessionRow? row = null)
@@ -834,8 +1058,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        Try(() => action(session.Id));
-        RefreshUsers();
+        RunBackground("사용자 작업", () => Attempt(() => action(session.Id)));
     }
 
     private void SendUserMessage()
@@ -851,14 +1074,8 @@ internal sealed class MainForm : Form
         string? text = Dialogs.SendMessage(this);
         if (text is not null)
         {
-            Try(() => Sessions.SendMessage(session.Id, "작업 관리자", text));
+            RunBackground("메시지 보내기", () => Attempt(() => Sessions.SendMessage(session.Id, "작업 관리자", text)));
         }
-    }
-
-    private void RefreshSlowPagesNow()
-    {
-        _lastSlow = DateTime.MinValue;
-        RefreshSlowPages();
     }
 
     private void ChooseColumns()
@@ -885,10 +1102,63 @@ internal sealed class MainForm : Form
         page.SetColumns(keys);
         _settings.Columns[page == _processes ? "processes" : "details"] = keys.ToList();
         _settings.Save();
-        RefreshCurrentPage();
     }
 
-    // 작업 실행 중 예외는 메시지 상자로 보여주고 프로그램은 계속 돌린다.
+    // 오래 걸릴 수 있는 작업을 UI 스레드 밖에서 실행한다.
+    // work는 실패 메시지(없으면 null)를 돌려준다. 완료 후 메시지 표시와 목록 갱신만 UI 스레드에서 한다.
+    private void RunBackground(string title, Func<string?> work, Action? onSuccess = null)
+    {
+        _currentWork = title;
+        _status.Text = $"{title} 중...";
+        Task.Run(() =>
+        {
+            string? error;
+            try
+            {
+                error = work();
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+
+            _ui?.Post(_ =>
+            {
+                if (IsDisposed)
+                {
+                    return;
+                }
+
+                _currentWork = "없음";
+                if (error is not null)
+                {
+                    MessageBox.Show(this, error, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                else
+                {
+                    onSuccess?.Invoke();
+                }
+
+                _worker?.RequestNow();
+            }, null);
+        });
+    }
+
+    // 백그라운드용: 예외를 메시지로 바꿔 돌려준다. RunBackground가 그 메시지를 화면에 보여준다.
+    private static string? Attempt(Action action)
+    {
+        try
+        {
+            action();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    // 작업 실행 중 예외는 메시지 상자로 보여주고 프로그램은 계속 돌린다(UI 스레드에서만 쓴다).
     private void Try(Action action)
     {
         try
@@ -901,8 +1171,8 @@ internal sealed class MainForm : Form
         }
     }
 
-    // 묶음 행이면 모든 구성원에게 적용하고, 실패한 항목만 모아서 한 번에 보여준다.
-    private void ForEachMember(ProcTarget target, Action<ProcessUsage> action)
+    // 백그라운드용: 묶음의 모든 구성원에게 적용하고, 실패한 항목을 모아 한 번에 돌려준다.
+    private static string? CollectErrors(ProcTarget target, Action<ProcessUsage> action)
     {
         var errors = new List<string>();
         foreach (var member in target.Members)
@@ -917,11 +1187,69 @@ internal sealed class MainForm : Form
             }
         }
 
-        if (errors.Count > 0)
+        return errors.Count > 0 ? string.Join(Environment.NewLine, errors.Take(8)) : null;
+    }
+
+    // ---- 프리징 감시 ----
+    // UI 스레드가 2초 넘게 메시지를 처리하지 못하거나, 작업 스레드가 한 단계에서 2초 넘게 머무르면 freeze.log에 기록한다.
+    // 기록에는 진행 중이던 작업 이름과 멈춘 단계 이름이 들어간다.
+    private void StartWatchdog()
+    {
+        var watchdog = new Thread(() =>
         {
-            MessageBox.Show(this, string.Join(Environment.NewLine, errors.Take(8)), "작업 실패",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
+            bool uiReported = false;
+            bool workerReported = false;
+            long uiFreezeStart = 0;
+            while (!_closing)
+            {
+                Thread.Sleep(500);
+
+                // UI 스레드가 처리할 수 있는 메시지를 하나 보내고, 그것이 처리되었는지로 응답 여부를 본다.
+                if (Interlocked.CompareExchange(ref _beatPending, 1, 0) == 0)
+                {
+                    _ui?.Post(_ =>
+                    {
+                        _lastUiBeat = Environment.TickCount64;
+                        Interlocked.Exchange(ref _beatPending, 0);
+                    }, null);
+                }
+
+                long gap = Environment.TickCount64 - _lastUiBeat;
+                if (gap > FreezeThresholdMs && !uiReported)
+                {
+                    uiReported = true;
+                    uiFreezeStart = _lastUiBeat;
+                    FreezeLog.Write($"UI 응답 없음 {gap}ms 이상, 진행 중이던 작업: {_currentWork}, UI 단계: {_uiStage}");
+                }
+                else if (gap < 500 && uiReported)
+                {
+                    uiReported = false;
+                    FreezeLog.Write($"UI 응답 회복 (멈춤 약 {Environment.TickCount64 - uiFreezeStart}ms)");
+                }
+
+                var worker = _worker;
+                if (worker is not null)
+                {
+                    string stage = worker.CurrentStage;
+                    long age = worker.StageAgeMs;
+                    if (stage != "대기" && age > FreezeThresholdMs && !workerReported)
+                    {
+                        workerReported = true;
+                        FreezeLog.Write($"작업 스레드 멈춤 {age}ms 이상, 멈춘 단계: {stage}");
+                    }
+                    else if (stage == "대기" && workerReported)
+                    {
+                        workerReported = false;
+                        FreezeLog.Write("작업 스레드 회복");
+                    }
+                }
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "TaskMonitor watchdog",
+        };
+        watchdog.Start();
     }
 
     private static T SafeGet<T>(Func<T> read, T fallback)
@@ -938,7 +1266,7 @@ internal sealed class MainForm : Form
 
     private static ToolStripMenuItem Item(string text, Action action, Keys shortcut = Keys.None)
     {
-        var item = new ToolStripMenuItem(text) { ShortcutKeys = shortcut };
+        var item = new ToolStripMenuItem(Strings.Localize(text)) { ShortcutKeys = shortcut };
         item.Click += (_, _) => action();
         return item;
     }

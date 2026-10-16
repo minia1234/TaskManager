@@ -15,7 +15,7 @@ internal sealed class GraphControl : Control
     public GraphControl()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-        BackColor = Color.White;
+        BackColor = Theme.Bg;
     }
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -36,7 +36,7 @@ internal sealed class GraphControl : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(BackColor);
 
-        using (var gridPen = new Pen(ColorTranslator.FromHtml("#E5E5E5")))
+        using (var gridPen = new Pen(Theme.Grid))
         {
             for (int i = 1; i < 4; i++)
             {

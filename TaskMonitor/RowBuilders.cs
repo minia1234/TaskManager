@@ -5,14 +5,14 @@ namespace TaskMonitor;
 // 작업 대상. Members가 비어 있으면 시스템 가상 행이라 작업을 할 수 없다.
 internal sealed record ProcTarget(string Name, IReadOnlyList<ProcessUsage> Members, bool IsGroup);
 
-// 각 페이지의 표 행을 만든다. 열 값, 정렬 키, 히트맵 색을 여기서 정한다.
+// 각 페이지의 표 행을 만든다. 열 값, 정렬 키, 히트맵 색, 아이콘을 여기서 정한다.
 internal static class RowBuilders
 {
     // 히트맵 4단계 (작업 관리자 캡처에서 샘플링한 색)
-    private static readonly Color Heat0 = ColorTranslator.FromHtml("#D6F1FF");
-    private static readonly Color Heat1 = ColorTranslator.FromHtml("#9CDDFF");
-    private static readonly Color Heat2 = ColorTranslator.FromHtml("#79CFFF");
-    private static readonly Color Heat3 = ColorTranslator.FromHtml("#58BEFF");
+    private static Color Heat0 => Theme.Heat0;
+    private static Color Heat1 => Theme.Heat1;
+    private static Color Heat2 => Theme.Heat2;
+    private static Color Heat3 => Theme.Heat3;
 
     public static readonly ColumnDef[] ProcessColumns =
     {
@@ -21,6 +21,7 @@ internal static class RowBuilders
         new("cpu", "CPU", 80, Right: true, Big: true),
         new("memory", "메모리", 110, Right: true, Big: true),
         new("disk", "디스크", 100, Right: true),
+        new("gpu", "GPU", 70, Right: true),
         new("pid", "PID", 70, Right: true),
         new("ppid", "부모 PID", 80, Right: true),
         new("threads", "스레드", 70, Right: true),
@@ -35,7 +36,7 @@ internal static class RowBuilders
         new("cmd", "명령줄", 420),
     };
 
-    public static readonly string[] DefaultProcessColumns = { "name", "status", "cpu", "memory", "disk", "pid", "eco" };
+    public static readonly string[] DefaultProcessColumns = { "name", "status", "cpu", "memory", "disk", "gpu", "pid", "eco" };
 
     public static readonly ColumnDef[] DetailColumns =
     {
@@ -46,13 +47,23 @@ internal static class RowBuilders
         new("cpu", "CPU", 70, Right: true),
         new("memory", "메모리", 100, Right: true),
         new("private", "개인 작업 세트", 120, Right: true),
+        new("gpu", "GPU", 70, Right: true),
         new("threads", "스레드", 70, Right: true),
         new("arch", "아키텍처", 80),
         new("eco", "효율성 모드", 100),
         new("desc", "설명", 260),
     };
 
-    public static readonly string[] DefaultDetailColumns = { "name", "pid", "status", "user", "cpu", "private", "arch", "desc" };
+    public static readonly string[] DefaultDetailColumns = { "name", "pid", "status", "user", "cpu", "private", "gpu", "arch", "desc" };
+
+    public static readonly ColumnDef[] HistoryColumns =
+    {
+        new("name", "이름", 200, Fill: true),
+        new("cpu", "CPU 시간", 110, Right: true),
+        new("disk", "디스크 입출력", 130, Right: true),
+        new("net", "네트워크", 90, Right: true),
+        new("since", "측정 시작", 140),
+    };
 
     public static readonly ColumnDef[] ServiceColumns =
     {
@@ -78,7 +89,7 @@ internal static class RowBuilders
         new("station", "세션 이름", 180, Fill: true),
     };
 
-    public static List<Row> Processes(Snapshot s, ProcessInfoCache info, bool grouped)
+    public static List<Row> Processes(Snapshot s, ProcessInfoCache info, bool grouped, IReadOnlyDictionary<int, double> gpu)
     {
         var rows = new List<Row>
         {
@@ -109,6 +120,9 @@ internal static class RowBuilders
                 group.Heat["memory"] = MemoryHeat(g.WorkingSetBytes);
                 group.Cells["disk"] = FormatRate(g.DiskBytesPerSec);
                 group.Sort["disk"] = g.DiskBytesPerSec;
+                double groupGpu = members.Sum(m => gpu.GetValueOrDefault(m.Pid));
+                group.Cells["gpu"] = FormatPercent(groupGpu);
+                group.Sort["gpu"] = groupGpu;
                 group.Cells["threads"] = g.Threads.ToString();
                 group.Sort["threads"] = g.Threads;
                 group.Cells["private"] = FormatMemory(g.PrivateBytes);
@@ -116,9 +130,10 @@ internal static class RowBuilders
 
                 foreach (var member in members)
                 {
-                    group.Children.Add(ProcessRow(member, info, "    ", new ProcTarget(member.Name, new[] { member }, false)));
+                    group.Children.Add(ProcessRow(member, info, "    ", new ProcTarget(member.Name, new[] { member }, false), gpu));
                 }
 
+                group.Icon = group.Children.Count > 0 ? group.Children[0].Icon : null;
                 rows.Add(group);
             }
         }
@@ -126,7 +141,7 @@ internal static class RowBuilders
         {
             foreach (var p in s.Processes)
             {
-                rows.Add(ProcessRow(p, info, "", new ProcTarget(p.Name, new[] { p }, false)));
+                rows.Add(ProcessRow(p, info, "", new ProcTarget(p.Name, new[] { p }, false), gpu));
             }
         }
 
@@ -138,13 +153,33 @@ internal static class RowBuilders
         return rows;
     }
 
-    public static List<Row> Details(Snapshot s, ProcessInfoCache info)
+    public static List<Row> Details(Snapshot s, ProcessInfoCache info, IReadOnlyDictionary<int, double> gpu)
     {
         var rows = new List<Row>();
         foreach (var p in s.Processes)
         {
-            var row = ProcessRow(p, info, "", new ProcTarget(p.Name, new[] { p }, false));
-            // 세부 정보는 같은 열 값을 쓰되 열 이름만 다르게 고르는 표다.
+            rows.Add(ProcessRow(p, info, "", new ProcTarget(p.Name, new[] { p }, false), gpu));
+        }
+
+        return rows;
+    }
+
+    // 앱 기록 행: CPU 시간(시:분:초), 디스크 입출력 합계, 네트워크는 제공하지 않아 "-".
+    public static List<Row> History(IReadOnlyList<AppHistory.Row> apps)
+    {
+        var rows = new List<Row>(apps.Count);
+        foreach (var app in apps)
+        {
+            var row = new Row { Key = app.Name };
+            row.Cells["name"] = app.Name;
+            row.Cells["cpu"] = TimeSpan.FromSeconds(app.CpuSeconds).ToString(@"h\:mm\:ss");
+            row.Cells["disk"] = DiskHealth.FormatBytes((long)app.IoBytes);
+            row.Cells["net"] = "-";
+            row.Cells["since"] = app.Since.ToString("yyyy-MM-dd HH:mm");
+            row.Sort["name"] = app.Name;
+            row.Sort["cpu"] = app.CpuSeconds;
+            row.Sort["disk"] = app.IoBytes;
+            row.Sort["since"] = app.Since;
             rows.Add(row);
         }
 
@@ -203,12 +238,13 @@ internal static class RowBuilders
         }).ToList();
     }
 
-    private static Row ProcessRow(ProcessUsage p, ProcessInfoCache info, string indent, ProcTarget target)
+    private static Row ProcessRow(ProcessUsage p, ProcessInfoCache info, string indent, ProcTarget target, IReadOnlyDictionary<int, double> gpu)
     {
         var detail = info.Get(p.Pid, p.CreateTime);
         bool eco = info.Efficiency(p.Pid);
+        double gpuPercent = gpu.GetValueOrDefault(p.Pid);
 
-        var row = new Row { Key = "pid:" + p.Pid, Tag = target };
+        var row = new Row { Key = "pid:" + p.Pid, Tag = target, Icon = IconCache.Get(detail.Path) };
         row.Cells["name"] = indent + p.Name;
         row.Sort["name"] = p.Name;
         row.Cells["status"] = "실행 중";
@@ -221,6 +257,8 @@ internal static class RowBuilders
         row.Heat["memory"] = MemoryHeat(p.WorkingSetBytes);
         row.Cells["disk"] = FormatRate(p.DiskBytesPerSec);
         row.Sort["disk"] = p.DiskBytesPerSec;
+        row.Cells["gpu"] = FormatPercent(gpuPercent);
+        row.Sort["gpu"] = gpuPercent;
         row.Cells["pid"] = p.Pid.ToString();
         row.Sort["pid"] = p.Pid;
         row.Cells["ppid"] = p.ParentPid.ToString();

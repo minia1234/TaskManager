@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Win32;
 
@@ -69,6 +70,9 @@ internal static class StartupItems
         return exe >= 0 ? command[..(exe + 4)] : command;
     }
 
+    // 게시자는 실행 파일 자원을 읽어야 해서 경로별로 한 번만 조회한다(3초마다 목록을 다시 읽기 때문).
+    private static readonly ConcurrentDictionary<string, string> Publishers = new(StringComparer.OrdinalIgnoreCase);
+
     private static string PublisherOf(string command)
     {
         string path = ExtractPath(command);
@@ -77,13 +81,16 @@ internal static class StartupItems
             return "";
         }
 
-        try
+        return Publishers.GetOrAdd(path, p =>
         {
-            return FileVersionInfo.GetVersionInfo(path).CompanyName ?? "";
-        }
-        catch (Exception)
-        {
-            return "";
-        }
+            try
+            {
+                return FileVersionInfo.GetVersionInfo(p).CompanyName ?? "";
+            }
+            catch (Exception)
+            {
+                return "";
+            }
+        });
     }
 }

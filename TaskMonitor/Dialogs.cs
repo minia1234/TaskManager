@@ -114,23 +114,35 @@ internal static class Dialogs
         return input.Text;
     }
 
-    private static Form BaseForm(string title, int width, int height) => new()
+    private static Form BaseForm(string title, int width, int height)
     {
-        Text = title,
-        Width = width,
-        Height = height,
-        FormBorderStyle = FormBorderStyle.FixedDialog,
-        StartPosition = FormStartPosition.CenterParent,
-        MinimizeBox = false,
-        MaximizeBox = false,
-        ShowInTaskbar = false,
-        Font = new Font("Segoe UI Variable Text", 9F),
-    };
+        var form = new Form
+        {
+            Text = Strings.Localize(title),
+            Width = width,
+            Height = height,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.CenterParent,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            Font = new Font("Segoe UI Variable Text", 9F),
+            BackColor = Theme.Bg,
+            ForeColor = Theme.Fg,
+        };
+
+        // 대화상자 안의 글자 요소는 모두 만든 뒤에 테마를 맞춘다.
+        form.Shown += (_, _) => Theme.ApplyTextColors(form);
+        return form;
+    }
 
     private static FlowLayoutPanel ButtonRow(Form form)
     {
-        var ok = new Button { Text = "확인", DialogResult = DialogResult.OK, Width = 90 };
-        var cancel = new Button { Text = "취소", DialogResult = DialogResult.Cancel, Width = 90 };
+        // 디자인: 확인은 강조색 단추, 취소는 테두리 단추. 아래 바는 탐색과 같은 배경을 쓴다.
+        var ok = new Button { Text = Strings.Localize("확인"), DialogResult = DialogResult.OK, Width = 90, FlatStyle = FlatStyle.Flat, BackColor = Theme.Accent, ForeColor = Theme.Bg };
+        var cancel = new Button { Text = Strings.Localize("취소"), DialogResult = DialogResult.Cancel, Width = 90, FlatStyle = FlatStyle.Flat, BackColor = Theme.Input, ForeColor = Theme.Fg };
+        ok.FlatAppearance.BorderSize = 0;
+        cancel.FlatAppearance.BorderColor = Theme.Border;
         form.AcceptButton = ok;
         form.CancelButton = cancel;
 
@@ -141,6 +153,7 @@ internal static class Dialogs
             Height = 48,
             FlowDirection = FlowDirection.RightToLeft,
             Padding = new Padding(8),
+            BackColor = Theme.Nav,
         };
         panel.Controls.Add(cancel);
         panel.Controls.Add(ok);

@@ -17,36 +17,44 @@ internal sealed class Row
     public Color? Fore { get; set; }
     public object? Tag { get; set; }
     public List<Row>? Children { get; set; }
+
+    // 첫 열 앞에 그리는 프로그램 아이콘(없으면 null)
+    public Bitmap? Icon { get; set; }
 }
 
 // 작업 관리자 표 공통 페이지: 정렬, 검색, 묶음 펼치기, 히트맵, 선택 유지, 열 머리글의 큰 사용률 숫자.
+// 실제 그리기는 RowGrid가 맡는다(보이는 행만 그린다).
 internal sealed class GridPage : UserControl
 {
-    private static readonly Color GridLine = ColorTranslator.FromHtml("#E5E5E5");
-    private static readonly Color SelectionColor = ColorTranslator.FromHtml("#CCE8FF");
-    private static readonly Font BodyFont = new("Segoe UI Variable Text", 9F);
-    private static readonly Font BigFont = new("Segoe UI Variable Display", 15F);
-
-    private readonly DataGridView _grid = new() { Dock = DockStyle.Fill };
+    private readonly RowGrid _grid = new() { Dock = DockStyle.Fill };
     private readonly ToolStrip _toolbar = new() { Dock = DockStyle.Top, GripStyle = ToolStripGripStyle.Hidden };
     private readonly List<ColumnDef> _all;
     private readonly Dictionary<string, ColumnDef> _defs;
     private readonly List<string> _visible = new();
     private readonly HashSet<string> _expanded = new();
-    private readonly Dictionary<string, (string Text, Color Color)> _big = new();
     private IReadOnlyList<Row> _rows = Array.Empty<Row>();
+    private List<Row> _shown = new();
     private string _filter = "";
     private string? _sortKey;
     private bool _sortDesc;
     private string? _selectedKey;
-    private bool _rendering;
+    private int _contentHash;
 
     public GridPage(IReadOnlyList<ColumnDef> all, IEnumerable<string> visible)
     {
         _all = all.ToList();
         _defs = all.ToDictionary(c => c.Key);
 
-        ConfigureGrid();
+        _grid.Expanded = _expanded;
+        _grid.SelectionChanged += (_, _) =>
+        {
+            _selectedKey = SelectedRow?.Key;
+            SelectionChangedByUser?.Invoke();
+        };
+        _grid.RowClicked += OnRowClicked;
+        _grid.RowRightClicked += OnRowRightClicked;
+        _grid.HeaderClicked += OnHeaderClicked;
+
         Controls.Add(_grid);
         Controls.Add(_toolbar);
         SetColumns(visible);
@@ -59,13 +67,14 @@ internal sealed class GridPage : UserControl
 
     public ToolStrip Toolbar => _toolbar;
 
-    public DataGridView Grid => _grid;
+    // 자체 검증용: 내부 표 컨트롤
+    internal RowGrid Grid => _grid;
 
     public IReadOnlyList<ColumnDef> AllColumns => _all;
 
     public IReadOnlyList<string> VisibleColumns => _visible;
 
-    public Row? SelectedRow => _grid.SelectedRows.Count > 0 ? _grid.SelectedRows[0].Tag as Row : null;
+    public Row? SelectedRow => _grid.RowAt(_grid.SelectedIndex);
 
     public IEnumerable<Row> GroupRows => _rows.Where(r => r.Children is not null);
 
@@ -85,55 +94,34 @@ internal sealed class GridPage : UserControl
             _visible.Add(_all[0].Key);
         }
 
-        _grid.Columns.Clear();
-        foreach (var key in _visible)
-        {
-            var d = _defs[key];
-            var column = new DataGridViewTextBoxColumn
-            {
-                Name = key,
-                HeaderText = d.Header,
-                Width = d.Width,
-                SortMode = DataGridViewColumnSortMode.Programmatic,
-            };
-            column.DefaultCellStyle.Alignment = d.Right
-                ? DataGridViewContentAlignment.MiddleRight
-                : DataGridViewContentAlignment.MiddleLeft;
-            if (d.Fill)
-            {
-                column.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
-            }
-
-            _grid.Columns.Add(column);
-        }
-
-        _grid.ColumnHeadersHeight = _visible.Any(k => _defs[k].Big) ? 64 : 32;
-        Render();
+        _grid.SetColumns(_visible.Select(k => _defs[k]).ToList());
+        _grid.HeaderHeight = _visible.Any(k => _defs[k].Big) ? 64 : 32;
+        _contentHash = 0;
+        Rebuild();
     }
 
     public void SetRows(IReadOnlyList<Row> rows)
     {
         _rows = rows;
-        Render();
+        Rebuild();
     }
 
     public void SetFilter(string text)
     {
         _filter = text.Trim();
-        Render();
+        Rebuild();
     }
 
     // 열 머리글에 크게 표시할 값 (예: CPU 전체 사용률)
     public void SetBig(string key, string text, Color color)
     {
-        _big[key] = (text, color);
-        _grid.Invalidate();
+        _grid.SetBig(key, text, color);
     }
 
     public void SelectKey(string key)
     {
         _selectedKey = key;
-        Render();
+        Rebuild();
     }
 
     public void ExpandAll(bool open)
@@ -147,89 +135,39 @@ internal sealed class GridPage : UserControl
             }
         }
 
-        Render();
+        Rebuild();
     }
 
-    private void ConfigureGrid()
+    private void OnRowClicked(int index, string key)
     {
-        _grid.AllowUserToAddRows = false;
-        _grid.AllowUserToDeleteRows = false;
-        _grid.AllowUserToResizeRows = false;
-        _grid.ReadOnly = true;
-        _grid.RowHeadersVisible = false;
-        _grid.MultiSelect = false;
-        _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        _grid.BackgroundColor = Color.White;
-        _grid.BorderStyle = BorderStyle.None;
-        _grid.EnableHeadersVisualStyles = false;
-        _grid.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None;
-        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-        _grid.RowTemplate.Height = 28;
-        _grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
-        _grid.GridColor = GridLine;
-        _grid.DefaultCellStyle.Font = BodyFont;
-        _grid.DefaultCellStyle.ForeColor = Color.Black;
-        _grid.DefaultCellStyle.SelectionBackColor = SelectionColor;
-        _grid.DefaultCellStyle.SelectionForeColor = Color.Black;
-        _grid.DefaultCellStyle.Padding = new Padding(6, 0, 6, 0);
-
-        _grid.CellPainting += PaintHeaderCell;
-        _grid.ColumnHeaderMouseClick += OnHeaderClick;
-        _grid.CellClick += OnCellClick;
-        _grid.SelectionChanged += (_, _) =>
-        {
-            if (_rendering)
-            {
-                return;
-            }
-
-            _selectedKey = SelectedRow?.Key;
-            SelectionChangedByUser?.Invoke();
-        };
-        _grid.MouseDown += OnMouseDown;
-    }
-
-    // 열 머리글: 큰 숫자 + 열 이름, 정렬 중이면 ▲/▼ 표시
-    private void PaintHeaderCell(object? sender, DataGridViewCellPaintingEventArgs e)
-    {
-        if (e.RowIndex != -1 || e.Graphics is not { } g || e.ColumnIndex < 0 || e.ColumnIndex >= _visible.Count)
+        var row = _grid.RowAt(index);
+        if (row?.Children is null || _visible.Count == 0 || key != _visible[0])
         {
             return;
         }
 
-        e.Handled = true;
-        var bounds = e.CellBounds;
-        g.FillRectangle(Brushes.White, bounds);
-
-        string key = _visible[e.ColumnIndex];
-        var d = _defs[key];
-        var flags = TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | (d.Right ? TextFormatFlags.Right : TextFormatFlags.Left);
-
-        if (d.Big && _big.TryGetValue(key, out var big))
+        // 묶음 행의 첫 열을 누르면 펼치고 접는다.
+        if (!_expanded.Remove(row.Key))
         {
-            TextRenderer.DrawText(g, big.Text, BigFont, new Rectangle(bounds.X + 6, bounds.Y + 4, bounds.Width - 12, 36),
-                big.Color, flags | TextFormatFlags.Top);
+            _expanded.Add(row.Key);
         }
 
-        string label = d.Header + (key == _sortKey ? (_sortDesc ? " ▼" : " ▲") : "");
-        var labelRect = d.Big
-            ? new Rectangle(bounds.X + 6, bounds.Bottom - 26, bounds.Width - 12, 22)
-            : new Rectangle(bounds.X + 6, bounds.Y, bounds.Width - 12, bounds.Height);
-        var labelFlags = flags | (d.Big ? TextFormatFlags.Bottom : TextFormatFlags.VerticalCenter);
-        TextRenderer.DrawText(g, label, BodyFont, labelRect, Color.Black, labelFlags);
-
-        using var pen = new Pen(GridLine);
-        g.DrawLine(pen, bounds.Left, bounds.Bottom - 1, bounds.Right, bounds.Bottom - 1);
+        Rebuild();
     }
 
-    private void OnHeaderClick(object? sender, DataGridViewCellMouseEventArgs e)
+    private void OnRowRightClicked(int index, Point point)
     {
-        if (e.RowIndex != -1 || e.ColumnIndex < 0 || e.ColumnIndex >= _visible.Count)
+        var row = _grid.RowAt(index);
+        if (row is null)
         {
             return;
         }
 
-        string key = _visible[e.ColumnIndex];
+        MenuFactory?.Invoke(row)?.Show(_grid, point);
+    }
+
+    private void OnHeaderClicked(string key)
+    {
         if (_sortKey == key)
         {
             _sortDesc = !_sortDesc;
@@ -241,133 +179,64 @@ internal sealed class GridPage : UserControl
             _sortDesc = _defs[key].Right;
         }
 
-        Render();
+        Rebuild();
     }
 
-    private void OnCellClick(object? sender, DataGridViewCellEventArgs e)
+    // 필터, 정렬, 펼치기를 반영해 표시 목록을 다시 만든다. 내용이 같으면 그리기는 건너뛴다.
+    private void Rebuild()
     {
-        if (e.RowIndex < 0 || _grid.Rows[e.RowIndex].Tag is not Row row || row.Children is null)
+        var shown = new List<Row>();
+        foreach (var row in Ordered(_rows))
         {
-            return;
+            bool open = row.Children is not null && _expanded.Contains(row.Key);
+            var children = row.Children is null
+                ? new List<Row>()
+                : Ordered(row.Children).Where(Matches).ToList();
+
+            if (!Matches(row) && children.Count == 0)
+            {
+                continue;
+            }
+
+            shown.Add(row);
+            if (open)
+            {
+                shown.AddRange(children);
+            }
         }
 
-        if (!_expanded.Remove(row.Key))
-        {
-            _expanded.Add(row.Key);
-        }
+        _shown = shown;
+        int hash = ContentHash();
+        bool changed = hash != _contentHash;
+        _contentHash = hash;
 
-        Render();
+        _grid.SortKey = _sortKey;
+        _grid.SortDesc = _sortDesc;
+        _grid.SetRows(_shown, changed);
+        _grid.SelectedIndex = _selectedKey is null ? -1 : _shown.FindIndex(r => r.Key == _selectedKey);
     }
 
-    private void OnMouseDown(object? sender, MouseEventArgs e)
+    // 표시 중인 행과 열의 글자, 펼침 상태를 해시로 요약한다. 이전과 같으면 다시 그릴 필요가 없다.
+    private int ContentHash()
     {
-        if (e.Button != MouseButtons.Right)
+        var hash = new HashCode();
+        hash.Add(_visible.Count);
+        foreach (var row in _shown)
         {
-            return;
-        }
-
-        var hit = _grid.HitTest(e.X, e.Y);
-        if (hit.RowIndex < 0 || _grid.Rows[hit.RowIndex].Tag is not Row row)
-        {
-            return;
-        }
-
-        _grid.ClearSelection();
-        _grid.Rows[hit.RowIndex].Selected = true;
-        var menu = MenuFactory?.Invoke(row);
-        menu?.Show(_grid, e.Location);
-    }
-
-    private void Render()
-    {
-        _rendering = true;
-        try
-        {
-            int firstRow = _grid.Rows.Count > 0 && _grid.FirstDisplayedScrollingRowIndex >= 0
-                ? _grid.FirstDisplayedScrollingRowIndex
-                : 0;
-
-            _grid.SuspendLayout();
-            _grid.Rows.Clear();
-
-            foreach (var row in Ordered(_rows))
+            hash.Add(row.Key);
+            hash.Add(row.Icon is not null);
+            if (row.Children is not null)
             {
-                bool open = row.Children is not null && _expanded.Contains(row.Key);
-                var children = row.Children is null
-                    ? new List<Row>()
-                    : Ordered(row.Children).Where(Matches).ToList();
-
-                if (!Matches(row) && children.Count == 0)
-                {
-                    continue;
-                }
-
-                AddRow(row, open);
-                if (open)
-                {
-                    foreach (var child in children)
-                    {
-                        AddRow(child, false);
-                    }
-                }
+                hash.Add(_expanded.Contains(row.Key));
             }
 
-            _grid.ClearSelection();
-            if (_selectedKey is not null)
+            foreach (var key in _visible)
             {
-                foreach (DataGridViewRow gridRow in _grid.Rows)
-                {
-                    if (gridRow.Tag is Row r && r.Key == _selectedKey)
-                    {
-                        gridRow.Selected = true;
-                        break;
-                    }
-                }
-            }
-
-            _grid.ResumeLayout();
-            if (firstRow < _grid.RowCount)
-            {
-                _grid.FirstDisplayedScrollingRowIndex = firstRow;
-            }
-
-            _grid.Invalidate();
-        }
-        finally
-        {
-            _rendering = false;
-        }
-    }
-
-    private void AddRow(Row row, bool open)
-    {
-        var values = new string[_visible.Count];
-        for (int i = 0; i < _visible.Count; i++)
-        {
-            string text = row.Cells.GetValueOrDefault(_visible[i]) ?? "";
-            if (i == 0 && row.Children is not null)
-            {
-                text = (open ? "▾ " : "▸ ") + text;
-            }
-
-            values[i] = text;
-        }
-
-        int index = _grid.Rows.Add(values);
-        var gridRow = _grid.Rows[index];
-        gridRow.Tag = row;
-        for (int i = 0; i < _visible.Count; i++)
-        {
-            if (row.Heat.TryGetValue(_visible[i], out var color))
-            {
-                gridRow.Cells[i].Style.BackColor = color;
+                hash.Add(row.Cells.GetValueOrDefault(key));
             }
         }
 
-        if (row.Fore is { } fore)
-        {
-            gridRow.DefaultCellStyle.ForeColor = fore;
-        }
+        return hash.ToHashCode();
     }
 
     private IEnumerable<Row> Ordered(IEnumerable<Row> rows)

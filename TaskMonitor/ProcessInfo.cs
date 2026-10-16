@@ -14,6 +14,7 @@ internal sealed class ProcessInfoCache
 
     private readonly Dictionary<(int Pid, long CreateTime), Info> _cache = new();
     private readonly Dictionary<int, (bool On, DateTime At)> _efficiency = new();
+    private readonly Dictionary<string, string> _descriptions = new(StringComparer.OrdinalIgnoreCase);
     private int _budget;
 
     // 한 틱에 새로 조회할 최대 개수. 프로세스가 많을 때 화면이 멈추지 않도록 나눠서 조회한다.
@@ -84,7 +85,7 @@ internal sealed class ProcessInfoCache
         }
     }
 
-    private static Info Query(int pid)
+    private Info Query(int pid)
     {
         IntPtr handle = Win32.OpenProcess(Win32.ProcessQueryLimitedInformation, false, pid);
         if (handle == IntPtr.Zero)
@@ -106,20 +107,30 @@ internal sealed class ProcessInfoCache
         }
     }
 
-    private static string DescriptionOf(string path)
+    // 설명은 실행 파일 자원을 디스크에서 읽어야 해서 비싸다. 같은 경로는 한 번만 읽는다.
+    private string DescriptionOf(string path)
     {
         if (path.Length == 0)
         {
             return "";
         }
 
+        if (_descriptions.TryGetValue(path, out var known))
+        {
+            return known;
+        }
+
+        string description;
         try
         {
-            return FileVersionInfo.GetVersionInfo(path).FileDescription ?? "";
+            description = FileVersionInfo.GetVersionInfo(path).FileDescription ?? "";
         }
         catch (Exception)
         {
-            return "";
+            description = "";
         }
+
+        _descriptions[path] = description;
+        return description;
     }
 }

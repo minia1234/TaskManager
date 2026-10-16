@@ -99,6 +99,35 @@ internal static class Win32
     [DllImport("advapi32.dll", SetLastError = true)]
     internal static extern bool QueryServiceStatus(IntPtr service, out ServiceStatus status);
 
+    // 시스템 전체 메모리 정보 (GetPerformanceInfo). 작업 관리자 "메모리" 페이지의 값과 같은 출처다.
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PerformanceInformation
+    {
+        public uint Size;
+        public nuint CommitTotal;
+        public nuint CommitLimit;
+        public nuint CommitPeak;
+        public nuint PhysicalTotal;
+        public nuint PhysicalAvailable;
+        public nuint SystemCache;
+        public nuint KernelTotal;
+        public nuint KernelPaged;
+        public nuint KernelNonpaged;
+        public nuint PageSize;
+        public uint HandleCount;
+        public uint ProcessCount;
+        public uint ThreadCount;
+    }
+
+    [DllImport("psapi.dll", SetLastError = true)]
+    internal static extern bool GetPerformanceInfo(out PerformanceInformation info, uint size);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    internal static extern bool ConvertSidToStringSidW(IntPtr sid, out IntPtr stringSid);
+
+    [DllImport("kernel32.dll")]
+    internal static extern IntPtr LocalFree(IntPtr memory);
+
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -233,6 +262,21 @@ internal static class Win32
         return QueryFullProcessImageNameW(process, 0, sb, ref size) ? sb.ToString(0, (int)size) : "";
     }
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> UserNames = new();
+
+    private static string LookupName(IntPtr sid)
+    {
+        var name = new StringBuilder(256);
+        var domain = new StringBuilder(256);
+        uint nameLen = (uint)name.Capacity, domainLen = (uint)domain.Capacity;
+        if (!LookupAccountSidW(null, sid, name, ref nameLen, domain, ref domainLen, out _))
+        {
+            return "";
+        }
+
+        return domainLen > 0 ? $"{domain}\\{name}" : name.ToString();
+    }
+
     // 토큰의 사용자 계정 이름 (도메인\사용자). 권한이 없으면 빈 문자열.
     internal static string QueryUserName(IntPtr process)
     {
@@ -258,15 +302,21 @@ internal static class Win32
                 }
 
                 IntPtr sid = Marshal.ReadIntPtr(info, 0);
-                var name = new StringBuilder(256);
-                var domain = new StringBuilder(256);
-                uint nameLen = (uint)name.Capacity, domainLen = (uint)domain.Capacity;
-                if (!LookupAccountSidW(null, sid, name, ref nameLen, domain, ref domainLen, out _))
+                if (!ConvertSidToStringSidW(sid, out IntPtr sidText))
                 {
                     return "";
                 }
 
-                return domainLen > 0 ? $"{domain}\\{name}" : name.ToString();
+                try
+                {
+                    string key = Marshal.PtrToStringUni(sidText) ?? "";
+                    // 같은 SID는 한 번만 찾는다. 도메인 계정 조회는 네트워크를 기다릴 수 있어서 반복하면 느려진다.
+                    return UserNames.GetOrAdd(key, _ => LookupName(sid));
+                }
+                finally
+                {
+                    LocalFree(sidText);
+                }
             }
             finally
             {
