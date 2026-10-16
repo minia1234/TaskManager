@@ -12,6 +12,7 @@ internal sealed class AppSettings
     public int ThresholdPercent { get; set; } = 70;
     public bool LogEnabled { get; set; } = true;
     public bool GroupProcesses { get; set; } = true;
+    public bool ProcessTree { get; set; }                  // 프로세스 목록을 부모-자식 트리로 보기
     public string ColorTheme { get; set; } = "light";     // light | dark | system
     public string Language { get; set; } = "ko";          // ko | en (다음 실행부터 적용)
     public Dictionary<string, List<string>> Columns { get; set; } = new();

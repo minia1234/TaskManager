@@ -16,10 +16,11 @@ internal sealed class MainForm : Form
     internal const int PageUsers = 4;
     internal const int PageDetails = 5;
     internal const int PageServices = 6;
+    internal const int PageEvents = 7;
     private const int FreezeThresholdMs = 2000;
     private const int SlowUiMs = 150;
 
-    private static readonly string[] PageTitles = { "프로세스", "성능", "앱 기록", "시작 프로그램", "사용자", "세부 정보", "서비스" };
+    private static readonly string[] PageTitles = { "프로세스", "성능", "앱 기록", "시작 프로그램", "사용자", "세부 정보", "서비스", "이벤트" };
     private static readonly int[] IntervalMs = { 500, 1000, 4000, 0 };
     private static readonly string[] IntervalNames = { "0.5 초", "1 초", "4 초", "일시 중지" };
     private static Color NavSelected => Theme.NavSel;
@@ -51,6 +52,7 @@ internal sealed class MainForm : Form
     private readonly GridPage _users;
     private readonly PerformancePage _performance = new() { Dock = DockStyle.Fill };
     private readonly GridPage _historyPage = new(RowBuilders.HistoryColumns, RowBuilders.HistoryColumns.Select(c => c.Key)) { Dock = DockStyle.Fill };
+    private readonly GridPage _eventsPage = new(RowBuilders.ActivityColumns, RowBuilders.ActivityColumns.Select(c => c.Key)) { Dock = DockStyle.Fill };
     private readonly Control[] _pages;
     private readonly Button[] _nav = new Button[PageTitles.Length];
     private readonly IReadOnlyList<Row>?[] _appliedRows = new IReadOnlyList<Row>?[PageTitles.Length];
@@ -76,6 +78,7 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem _minimizeOnUse = new("사용하지 않을 때 최소화") { CheckOnClick = true };
     private readonly ToolStripMenuItem _hideWhenMinimized = new("최소화 시 숨기기") { CheckOnClick = true };
     private readonly ToolStripMenuItem _groupMenu = new("이름별 합산") { CheckOnClick = true };
+    private readonly ToolStripMenuItem _treeMenu = new("프로세스 트리로 보기") { CheckOnClick = true };
     private readonly ToolStripMenuItem[] _intervalMenu = new ToolStripMenuItem[IntervalMs.Length];
 
     private readonly ToolStripButton _pEnd;
@@ -114,7 +117,7 @@ internal sealed class MainForm : Form
         _users = new GridPage(RowBuilders.UserColumns, RowBuilders.UserColumns.Select(c => c.Key)) { Dock = DockStyle.Fill };
 
 
-        _pages = new Control[] { _processes, _performance, _historyPage, _startup, _users, _details, _services };
+        _pages = new Control[] { _processes, _performance, _historyPage, _startup, _users, _details, _services, _eventsPage };
         foreach (var page in _pages)
         {
             _content.Controls.Add(page);
@@ -148,6 +151,7 @@ internal sealed class MainForm : Form
         _uLogoff = AddButton(_users, "로그오프", () => UserAction("이 사용자를 로그오프할까요? 저장되지 않은 작업은 잃을 수 있습니다.", id => Sessions.Logoff(id)));
         _uMessage = AddButton(_users, "메시지 보내기", SendUserMessage);
         AddButton(_historyPage, "기록 지우기", ResetHistory);
+        AddButton(_eventsPage, "기록 폴더 열기", OpenRecordsFolder);
 
         BuildHeader();
         BuildStatusBar();
@@ -240,6 +244,7 @@ internal sealed class MainForm : Form
             GpuDetailMonitor.Start();
             _worker = new DataWorker(Publish, _perf, _currentPage, _settings.UpdateIntervalMs,
                 _settings.GroupProcesses, _settings.LogEnabled, _settings.ThresholdPercent);
+            _worker.SetTree(_settings.ProcessTree);
             _worker.Start();
             StartWatchdog();
         };
@@ -421,6 +426,15 @@ internal sealed class MainForm : Form
         _groupMenu.Checked = _settings.GroupProcesses;
         _groupMenu.Click += (_, _) => _groupCheck.Checked = _groupMenu.Checked;
         view.DropDownItems.Add(_groupMenu);
+        _treeMenu.Checked = _settings.ProcessTree;
+        _treeMenu.Click += (_, _) => SetProcessTree(_treeMenu.Checked);
+        view.DropDownItems.Add(_treeMenu);
+
+        var records = new ToolStripMenuItem("기록");
+        records.DropDownItems.Add(Item("원인 분석 리포트 만들기 (최근 1시간)", CreateCauseReport));
+        records.DropDownItems.Add(Item("기록 내보내기 (CSV)...", ExportRecords));
+        records.DropDownItems.Add(new ToolStripSeparator());
+        records.DropDownItems.Add(Item("기록 폴더 열기", OpenRecordsFolder));
 
         var help = new ToolStripMenuItem("도움말");
         help.DropDownItems.Add(Item("정보", () => MessageBox.Show(this,
@@ -431,6 +445,7 @@ internal sealed class MainForm : Form
         _menu.Items.Add(file);
         _menu.Items.Add(options);
         _menu.Items.Add(view);
+        _menu.Items.Add(records);
         _menu.Items.Add(help);
     }
 
@@ -700,7 +715,13 @@ internal sealed class MainForm : Form
             _last = snap;
             _lastPerf = frame.Perf;
             UiStep("화면 반영: 성능", () => _performance.Update(snap, frame.Perf));
-            _status.Text = Strings.Fmt("마지막 갱신 {0}   |   프로세스 {1}개   |   기록 파일: {2}", DateTime.Now.ToString("HH:mm:ss"), snap.ProcessCount, SpikeLog.FilePath);
+            string status = Strings.Fmt("마지막 갱신 {0}   |   프로세스 {1}개   |   기록 파일: {2}", DateTime.Now.ToString("HH:mm:ss"), snap.ProcessCount, SpikeLog.FilePath);
+            if (_worker?.LastAlert is { } alert)
+            {
+                status += $"   |   {Strings.Localize("경고")}: {alert}";
+            }
+
+            _status.Text = status;
             if (_currentPage == PageProcesses)
             {
                 UpdateBigHeaders();
@@ -734,6 +755,7 @@ internal sealed class MainForm : Form
         PageDetails => _details,
         PageHistory => _historyPage,
         PageServices => _services,
+        PageEvents => _eventsPage,
         PageStartup => _startup,
         PageUsers => _users,
         _ => null,
@@ -833,6 +855,7 @@ internal sealed class MainForm : Form
         menu.Items.Add(Item("파일 위치 열기", () => RunBackground("파일 위치 열기", () => Attempt(() => ProcessActions.OpenFileLocation(ProcessInfoCache.PathOf(first.Pid))))));
         menu.Items.Add(Item("온라인 검색", () => RunBackground("온라인 검색", () => Attempt(() => ProcessActions.SearchOnline(target.Name)))));
         menu.Items.Add(Item("속성", () => RunBackground("속성 열기", () => Attempt(() => ProcessActions.ShowProperties(ProcessInfoCache.PathOf(first.Pid))))));
+        menu.Items.Add(Item("분석 창 열기", () => OpenAnalysis(first.Pid)));
 
         if (!target.IsGroup)
         {
@@ -1020,6 +1043,81 @@ internal sealed class MainForm : Form
         {
             RunBackground("새 작업 실행", () => Attempt(() => ProcessActions.RunNewTask(task.Command, task.Admin)));
         }
+    }
+
+    // 프로세스 목록 트리 보기: 설정에 남기고 다음 샘플링부터 트리로 그린다.
+    private void SetProcessTree(bool tree)
+    {
+        _settings.ProcessTree = tree;
+        _settings.Save();
+        _treeMenu.Checked = tree;
+        _worker?.SetTree(tree);
+    }
+
+    // 프로세스 분석 창: 한 프로세스의 실행 정보와 자원, 연결, 최근 활동을 1초마다 새로 보여 준다.
+    private void OpenAnalysis(int pid)
+    {
+        var form = new ProcessAnalysisForm($"프로세스 분석 - PID {pid}",
+            () => ProcessAnalysisText.Build(pid, _last, _lastPerf, _worker?.Activity));
+        form.Show(this);
+    }
+
+    // 최근 1시간 원인 분석 리포트를 기록 폴더에 Markdown으로 쓰고 메모장으로 연다.
+    private void CreateCauseReport()
+    {
+        string? path = null;
+        RunBackground("원인 분석 리포트", () =>
+        {
+            if (_worker is not { } worker)
+            {
+                return "아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요.";
+            }
+
+            string folder = Path.Combine(RecordFolder.Path, "reports");
+            Directory.CreateDirectory(folder);
+            path = Path.Combine(folder, $"cause-report-{DateTime.Now:yyyyMMdd-HHmmss}.md");
+            string text = CauseReport.Build(DateTime.Now, worker.Resources, worker.Activity, worker.AppRows);
+            File.WriteAllText(path, text, new System.Text.UTF8Encoding(true));
+            return null;
+        }, () =>
+        {
+            if (path is not null)
+            {
+                Process.Start(new ProcessStartInfo("notepad.exe", $"\"{path}\"") { UseShellExecute = true });
+            }
+        });
+    }
+
+    // 기록 전체(자원, 활동)를 날짜가 붙은 폴더에 CSV로 내보낸다.
+    private void ExportRecords()
+    {
+        string? folder = null;
+        RunBackground("기록 내보내기", () =>
+        {
+            if (_worker is not { } worker)
+            {
+                return "아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요.";
+            }
+
+            folder = Path.Combine(RecordFolder.Path, "export", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            CauseReport.ExportCsv(worker.Resources, worker.Activity, folder);
+            return null;
+        }, () =>
+        {
+            if (folder is not null)
+            {
+                ProcessActions.OpenFileLocation(Path.Combine(folder, "resource-log.csv"));
+            }
+        });
+    }
+
+    private void OpenRecordsFolder()
+    {
+        RunBackground("기록 폴더 열기", () => Attempt(() =>
+        {
+            Directory.CreateDirectory(RecordFolder.Path);
+            ProcessActions.OpenFileLocation(Path.Combine(RecordFolder.Path, "activity-log.jsonl"));
+        }));
     }
 
     // confirm: 중지와 다시 시작은 그 서비스를 쓰는 프로그램을 멈추게 하므로 먼저 묻는다.

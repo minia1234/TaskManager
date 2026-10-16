@@ -479,6 +479,137 @@ internal static class SelfTest
             page[o + 1] = (byte)threshold;
         }
 
+        // 장기 기록: 파일 회전, 시작·종료 추적, 경고 규칙, 자원·활동 저장, 연결 표, 프로세스 트리, 리포트, 내보내기, 분석 창.
+        // 기록 파일은 임시 폴더에 만들고 끝나면 지운다(실제 기록 폴더를 건드리지 않는다).
+        ProcessUsage Usage(int pid, int parentPid, string name, long createTime) =>
+            new(pid, parentPid, name, 0, 0, 0, 0, 1, 1, 1, createTime);
+        Snapshot Snap(double cpu) => new(cpu, 0, 0, 8, Array.Empty<double>(),
+            new[] { Usage(300, 1, "hog.exe", 500) }, Array.Empty<ProcessGroup>(), Array.Empty<ExitedProcess>(), 1, 1, 1, cpu, 0);
+        PerfSnapshot Perf(double ramPercent) => PerfSnapshot.Empty with
+        {
+            Memory = new MemoryStats(100, (long)(100 - ramPercent), 0, 0, 0, 0, 0),
+        };
+        GpuDetail TestGpu(int temp) => new("NVIDIA 시험", "", temp, null, null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null, null, null, null, null, null, null, Array.Empty<GpuProcessMemory>(), null,
+            Array.Empty<GpuEncoderSession>(), null, null, null, null);
+
+        string recordDir = Path.Combine(Path.GetTempPath(), "TaskMonitorSelfTest-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(recordDir);
+
+            var rotating = new JsonLinesFile(Path.Combine(recordDir, "rotate.jsonl"), 200);
+            for (int i = 0; i < 10; i++)
+            {
+                rotating.Append(new[] { $"{{\"line\":{i},\"padding\":\"0123456789012345678901234567890123456789\"}}" });
+            }
+
+            // 파일은 현재 것과 ".1" 하나만 남는다. 그래서 오래된 줄은 밀려나고, 가장 최근 줄은 반드시 남아야 한다.
+            var kept = rotating.ReadAll().ToList();
+            Check("기록 파일 회전(.1 하나만 남기고 최근 줄은 보존)", File.Exists(Path.Combine(recordDir, "rotate.jsonl.1"))
+                && kept.Count > 0 && kept.Count < 10 && kept[^1].Contains("\"line\":9,"),
+                $"남은 줄 {kept.Count}");
+
+            var tracker = new ProcessEventTracker();
+            var stamp = DateTime.Now;
+            var baseline = tracker.Update(new[] { Usage(100, 1, "alpha.exe", 1000) }, stamp);
+            var started = tracker.Update(new[] { Usage(100, 1, "alpha.exe", 1000), Usage(200, 100, "beta.exe", 2000) }, stamp);
+            var exited = tracker.Update(new[] { Usage(200, 100, "beta.exe", 2000) }, stamp);
+            var reused = tracker.Update(new[] { Usage(200, 100, "gamma.exe", 3000) }, stamp);
+            bool trackerOk = baseline.Count == 0
+                && started.Count == 1 && started[0].Kind == ActivityLog.Start && started[0].Subject == "beta.exe"
+                && exited.Count == 1 && exited[0].Kind == ActivityLog.Exit && exited[0].Subject == "alpha.exe"
+                && reused.Count == 2;
+            Check("프로세스 시작·종료 추적(PID 재사용은 종료 + 시작)", trackerOk,
+                $"기준 {baseline.Count}, 시작 {started.Count}, 종료 {exited.Count}, 재사용 {reused.Count}");
+
+            var rules = new AlertRules();
+            var t0 = new DateTime(2026, 10, 16, 12, 0, 0);
+            var noDisks = new Dictionary<int, DiskHealthInfo>();
+            var gpu90 = new[] { TestGpu(90) };
+            var gpu79 = new[] { TestGpu(79) };
+            var e0 = rules.Evaluate(t0, Snap(95), Perf(95), gpu90, noDisks);
+            var e1 = rules.Evaluate(t0.AddSeconds(1), Snap(95), Perf(95), gpu90, noDisks);
+            var e2 = rules.Evaluate(t0.AddSeconds(21), Snap(95), Perf(95), gpu90, noDisks);
+            var e3 = rules.Evaluate(t0.AddSeconds(22), Snap(95), Perf(88), new[] { TestGpu(80) }, noDisks);
+            var e4 = rules.Evaluate(t0.AddSeconds(23), Snap(95), Perf(80), gpu79, noDisks);
+            var e5 = rules.Evaluate(t0.AddSeconds(24), Snap(95), Perf(92), gpu90, noDisks);
+            bool alertsOk = e0.Count == 2 && e0.Any(a => a.Subject == "메모리 부족") && e0.Any(a => a.Subject == "GPU 과열")
+                && e1.Count == 0
+                && e2.Count == 1 && e2[0].Subject == "CPU 높음 지속"
+                && e3.Count == 0 && e4.Count == 0
+                && e5.Count == 2;
+            Check("경고 규칙(한 번만 울림, 20초 지속 CPU, 떨림 방지)", alertsOk,
+                $"0초 {e0.Count}, 1초 {e1.Count}, 21초 {e2.Count}, 22초 {e3.Count}, 23초 {e4.Count}, 24초 {e5.Count}");
+
+            var resources = new ResourceLog(Path.Combine(recordDir, "resource.jsonl"));
+            resources.Add(new ResourceSample(stamp.AddSeconds(-10), 40, 50, 8L << 30, 30, 61, 2L << 30));
+            resources.Add(new ResourceSample(stamp, 42, 51, 8L << 30, 35, null, null));
+            var readBack = resources.ReadRange(stamp.AddMinutes(-1), stamp.AddMinutes(1));
+            Check("자원 기록 저장·읽기", readBack.Count == 2 && readBack[0].GpuTempC == 61 && readBack[1].GpuTempC is null,
+                $"읽은 {readBack.Count}개");
+
+            var activity = new ActivityLog(Path.Combine(recordDir, "activity.jsonl"));
+            activity.Add(new[]
+            {
+                new ActivityEvent(stamp, ActivityLog.Alert, "메모리 부족", "사용 95%", 0),
+                new ActivityEvent(stamp, ActivityLog.Start, "beta.exe", "PID 200", 200),
+            });
+            var ranged = activity.ReadRange(stamp.AddMinutes(-1), stamp.AddMinutes(1));
+            Check("활동 기록 저장·읽기", activity.Recent().Count == 2 && ranged.Count == 2 && ranged[0].Kind == ActivityLog.Alert,
+                $"최근 {activity.Recent().Count}건, 기간 {ranged.Count}건");
+
+            try
+            {
+                NetTable.Refresh();
+                int connections = NetTable.Latest.Values.Sum(v => v.Count);
+                Check("연결 표 읽기(iphlpapi, 소유 PID)", connections > 0, $"PID {NetTable.Latest.Count}개, 연결 {connections}개");
+            }
+            catch (Exception ex)
+            {
+                Check("연결 표 읽기(iphlpapi, 소유 PID)", false, ex.Message);
+            }
+
+            var treeSnap = new Snapshot(0, 0, 0, 8, Array.Empty<double>(),
+                new[] { Usage(100, 1, "root.exe", 1000), Usage(200, 100, "child.exe", 2000), Usage(300, 999, "orphan.exe", 3000) },
+                Array.Empty<ProcessGroup>(), Array.Empty<ExitedProcess>(), 3, 0, 0, 0, 0);
+            var treeRows = RowBuilders.ProcessTree(treeSnap, new ProcessInfoCache(), new Dictionary<int, double>());
+            var rootRow = treeRows.FirstOrDefault(r => r.Key == "pid:100");
+            bool treeOk = treeRows.Count == 4 && rootRow?.Children?.Count == 1 && rootRow.Children[0].Key == "pid:200"
+                && treeRows.Any(r => r.Key == "pid:300");
+            Check("프로세스 트리(자식은 부모 밑, 부모 없으면 최상위)", treeOk, $"행 {treeRows.Count}개");
+
+            var reportNow = stamp.AddSeconds(5);
+            string report = CauseReport.Build(reportNow, resources, activity, Array.Empty<AppHistory.Row>());
+            Check("원인 분석 리포트 생성", report.Contains("# 원인 분석 리포트") && report.Contains("| CPU |") && report.Contains("메모리 부족"),
+                $"{report.Length}자");
+
+            var exported = CauseReport.ExportCsv(resources, activity, Path.Combine(recordDir, "export"));
+            string csvHead = File.ReadLines(exported.ResourcePath).First();
+            Check("기록 CSV 내보내기", File.Exists(exported.ActivityPath) && csvHead.StartsWith("time,cpu_percent", StringComparison.Ordinal),
+                $"{Path.GetFileName(exported.ResourcePath)}: {csvHead}");
+
+            var analysisSnap = sampler.Sample();
+            string analysis = ProcessAnalysisText.Build(Environment.ProcessId, analysisSnap, null, activity);
+            Check("프로세스 분석 창 내용(자기 자신)", analysis.Contains("TaskMonitor") && analysis.Contains("[네트워크 연결]"),
+                analysis.Split('\n')[0].Trim());
+        }
+        catch (Exception ex)
+        {
+            Check("장기 기록 검사", false, ex.Message);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(recordDir, true);
+            }
+            catch (IOException)
+            {
+                // 임시 폴더가 잠겨 있으면 그대로 둔다.
+            }
+        }
+
         return Finish(outPath, log, failures);
     }
 

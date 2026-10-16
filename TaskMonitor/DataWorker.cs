@@ -12,7 +12,7 @@ internal sealed class DataWorker : IDisposable
 
     private static readonly TimeSpan SlowInterval = TimeSpan.FromSeconds(3);
     private const int SlowStageMs = 300;
-    private const int PageCount = 7;
+    private const int PageCount = 8;
 
     private readonly Action<Frame> _publish;
     private readonly SystemPerf _perf;
@@ -26,14 +26,26 @@ internal sealed class DataWorker : IDisposable
     private readonly AppHistory _history = new();
     private DateTime _lastHistorySave = DateTime.Now;
 
+    // 장기 기록: 프로세스 시작·종료와 경고(활동 기록), 5초마다 CPU·메모리·GPU 값(자원 기록).
+    private readonly ActivityLog _activity = new(Path.Combine(RecordFolder.Path, "activity-log.jsonl"));
+    private readonly ResourceLog _resources = new(Path.Combine(RecordFolder.Path, "resource-log.jsonl"));
+    private readonly ProcessEventTracker _tracker = new();
+    private readonly AlertRules _alerts = new();
+    private DateTime _lastResourceWrite = DateTime.MinValue;
+    private int _activityShown = -1;
+
     private volatile bool _stop;
     private volatile int _page;
     private volatile bool _rebuildRequested;
     private volatile bool _sampleRequested;
     private volatile int _intervalMs;
     private volatile bool _grouped;
+    private volatile bool _tree;
     private volatile bool _logEnabled;
     private volatile int _threshold;
+    private readonly object _alertGate = new();
+    private string? _alertText;
+    private DateTime _alertAt;
     private volatile Snapshot? _snapshot;
     private DateTime _lastSlow = DateTime.MinValue;
     private volatile string _stage = "대기";
@@ -88,6 +100,32 @@ internal sealed class DataWorker : IDisposable
         _wake.Set();
     }
 
+    // 프로세스 목록을 트리(부모 아래 자식)로 보여 줄지. 켜면 "이름별 합산"은 적용되지 않는다.
+    public void SetTree(bool tree)
+    {
+        _tree = tree;
+        _rebuildRequested = true;
+        _wake.Set();
+    }
+
+    public ActivityLog Activity => _activity;
+
+    public ResourceLog Resources => _resources;
+
+    public IReadOnlyList<AppHistory.Row> AppRows => _history.Snapshot();
+
+    // 최근 경고 한 줄(상태 바에 보인다). 발생 후 5분이 지나면 null이 된다.
+    public string? LastAlert
+    {
+        get
+        {
+            lock (_alertGate)
+            {
+                return _alertText is not null && DateTime.Now - _alertAt < TimeSpan.FromMinutes(5) ? _alertText : null;
+            }
+        }
+    }
+
     private void Run()
     {
         while (!_stop)
@@ -135,6 +173,7 @@ internal sealed class DataWorker : IDisposable
                         RunStage("기록 파일", () => SpikeLog.Append(snap));
                     }
 
+                    RunStage("장기 기록", () => RecordActivity(snap));
                     rebuild = true;
                 }
             }
@@ -147,7 +186,13 @@ internal sealed class DataWorker : IDisposable
                 switch (page)
                 {
                     case MainForm.PageProcesses when rebuild || GetRows(page) is null:
-                        SetRows(page, RunStage("프로세스 행", () => RowBuilders.Processes(snapshot, _info, _grouped, perf.GpuByPid)));
+                        SetRows(page, RunStage("프로세스 행", () => _tree
+                            ? RowBuilders.ProcessTree(snapshot, _info, perf.GpuByPid)
+                            : RowBuilders.Processes(snapshot, _info, _grouped, perf.GpuByPid)));
+                        break;
+                    case MainForm.PageEvents when rebuild || _activity.Version != _activityShown || GetRows(page) is null:
+                        _activityShown = _activity.Version;
+                        SetRows(page, RunStage("이벤트 행", () => RowBuilders.Activity(_activity.Recent())));
                         break;
                     case MainForm.PageHistory when rebuild || GetRows(page) is null:
                         SetRows(page, RunStage("앱 기록 행", () => RowBuilders.History(_history.Snapshot())));
@@ -166,6 +211,46 @@ internal sealed class DataWorker : IDisposable
         catch (Exception ex)
         {
             _publish(new Frame(page, _snapshot, _perf.Latest, GetRows(page), ex.Message));
+        }
+    }
+
+    // 샘플마다: 프로세스 시작·종료와 경고를 활동 기록에 남기고, 자원 기록 주기(5초)가 지났으면 CPU·메모리·GPU 값을 남긴다.
+    private void RecordActivity(Snapshot snap)
+    {
+        var now = DateTime.Now;
+        NetTable.Refresh();
+        var perf = _perf.Latest;
+        var gpus = GpuDetailMonitor.Latest;
+
+        var events = _tracker.Update(snap.Processes, now);
+        var alerts = _alerts.Evaluate(now, snap, perf, gpus, DiskHealthMonitor.Latest);
+        var recorded = new List<ActivityEvent>(events.Count + alerts.Count);
+        recorded.AddRange(events);
+        recorded.AddRange(alerts);
+        _activity.Add(recorded);
+        if (alerts.Count > 0)
+        {
+            var last = alerts[^1];
+            lock (_alertGate)
+            {
+                _alertText = $"{now:HH:mm:ss} {last.Subject}: {last.Detail}";
+                _alertAt = now;
+            }
+        }
+
+        if (now - _lastResourceWrite >= ResourceLog.Interval && perf.Memory.Total > 0)
+        {
+            _lastResourceWrite = now;
+            long used = perf.Memory.Total - perf.Memory.Available;
+            double gpuPercent = perf.Gpus.Count > 0 ? perf.Gpus.Max(g => g.Utilization) : 0;
+            _resources.Add(new ResourceSample(
+                now,
+                snap.TotalCpuPercent,
+                100.0 * used / perf.Memory.Total,
+                used,
+                gpuPercent,
+                gpus.Select(g => g.TemperatureC).Max(),
+                gpus.Count > 0 ? gpus.Sum(g => g.VramUsedBytes ?? 0) : null));
         }
     }
 

@@ -26,6 +26,7 @@ internal static class RowBuilders
         new("ppid", "부모 PID", 80, Right: true),
         new("threads", "스레드", 70, Right: true),
         new("handles", "핸들", 70, Right: true),
+        new("conn", "연결", 60, Right: true),
         new("user", "사용자", 170),
         new("session", "세션", 60, Right: true),
         new("arch", "아키텍처", 80),
@@ -153,6 +154,100 @@ internal static class RowBuilders
         return rows;
     }
 
+    // 프로세스 트리: 부모가 목록에 있으면 그 밑에 붙인다. 부모가 없거나 자식이 부모보다 먼저 만들어졌으면(PID 재사용) 최상위다.
+    public static List<Row> ProcessTree(Snapshot s, ProcessInfoCache info, IReadOnlyDictionary<int, double> gpu)
+    {
+        var rows = new List<Row>
+        {
+            SystemRow("sys:dpc", "[시스템] 인터럽트 / DPC (드라이버)", "커널 가상 항목", s.DpcInterruptPercent),
+            SystemRow("sys:unattributed", "[시스템] 미귀속 커널 시간", "프로세스에 안 잡힌 나머지", s.UnattributedPercent),
+        };
+
+        var byPid = s.Processes.ToDictionary(p => p.Pid);
+        var children = s.Processes.ToLookup(p => p.ParentPid);
+        var placed = new HashSet<int>();
+
+        Row Build(ProcessUsage p)
+        {
+            placed.Add(p.Pid);
+            var row = ProcessRow(p, info, "", new ProcTarget(p.Name, new[] { p }, false), gpu);
+            var kids = children[p.Pid]
+                .Where(c => c.Pid != p.Pid && c.CreateTime >= p.CreateTime && !placed.Contains(c.Pid))
+                .ToList();
+            if (kids.Count > 0)
+            {
+                row.Children = kids.Select(Build).ToList();
+            }
+
+            return row;
+        }
+
+        foreach (var p in s.Processes)
+        {
+            bool root = !byPid.TryGetValue(p.ParentPid, out var parent) || p.CreateTime < parent.CreateTime;
+            if (root && !placed.Contains(p.Pid))
+            {
+                rows.Add(Build(p));
+            }
+        }
+
+        // 순환하는 부모 관계 등으로 아직 붙지 않은 프로세스는 최상위에 남겨서 빠지지 않게 한다.
+        foreach (var p in s.Processes)
+        {
+            if (!placed.Contains(p.Pid))
+            {
+                rows.Add(Build(p));
+            }
+        }
+
+        return rows;
+    }
+
+    public static readonly ColumnDef[] ActivityColumns =
+    {
+        new("time", "시각", 90),
+        new("kind", "구분", 90),
+        new("subject", "대상", 260, Fill: true),
+        new("detail", "내용", 380),
+        new("pid", "PID", 70, Right: true),
+    };
+
+    // 최신 기록이 위로 오도록 만든다. 화면 부하를 줄이려고 최근 500건만 보인다.
+    public static List<Row> Activity(IReadOnlyList<ActivityEvent> events)
+    {
+        var rows = new List<Row>();
+        for (int i = events.Count - 1; i >= 0 && rows.Count < 500; i--)
+        {
+            var e = events[i];
+            var row = new Row { Key = $"evt:{i}:{e.Time.Ticks}:{e.Kind}:{e.Pid}" };
+            row.Cells["time"] = e.Time.ToString("HH:mm:ss");
+            row.Sort["time"] = e.Time.Ticks;
+            row.Cells["kind"] = KindLabel(e.Kind);
+            row.Sort["kind"] = e.Kind;
+            row.Cells["subject"] = e.Subject;
+            row.Sort["subject"] = e.Subject;
+            row.Cells["detail"] = e.Detail;
+            row.Sort["detail"] = e.Detail;
+            row.Cells["pid"] = e.Pid > 0 ? e.Pid.ToString() : "-";
+            row.Sort["pid"] = e.Pid;
+            if (e.Kind == ActivityLog.Alert)
+            {
+                row.Fore = Theme.Red;
+            }
+
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    private static string KindLabel(string kind) => kind switch
+    {
+        ActivityLog.Start => "시작",
+        ActivityLog.Exit => "종료",
+        _ => "경고",
+    };
+
     public static List<Row> Details(Snapshot s, ProcessInfoCache info, IReadOnlyDictionary<int, double> gpu)
     {
         var rows = new List<Row>();
@@ -267,6 +362,9 @@ internal static class RowBuilders
         row.Sort["threads"] = p.Threads;
         row.Cells["handles"] = p.Handles.ToString();
         row.Sort["handles"] = p.Handles;
+        int connections = NetTable.Latest.TryGetValue(p.Pid, out var conns) ? conns.Count : 0;
+        row.Cells["conn"] = connections.ToString();
+        row.Sort["conn"] = connections;
         row.Cells["user"] = detail.User;
         row.Sort["user"] = detail.User;
         row.Cells["session"] = p.SessionId.ToString();
