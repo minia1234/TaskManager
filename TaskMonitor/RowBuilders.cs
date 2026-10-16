@@ -60,7 +60,7 @@ internal static class RowBuilders
     {
         new("name", "이름", 200, Fill: true),
         new("cpu", "CPU 시간", 110, Right: true),
-        new("disk", "디스크 입출력", 130, Right: true),
+        new("disk", "I/O 전송량", 130, Right: true),
         new("net", "네트워크", 90, Right: true),
         new("since", "측정 시작", 140),
     };

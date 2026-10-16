@@ -5,14 +5,16 @@ namespace TaskMonitor;
 // NVIDIA 핫스팟·메모리 접합부 온도: NVAPI(nvapi64.dll, 드라이버에 들어 있음)를 nvapi_QueryInterface로 불러 호출한다.
 // 함수 ID와 구조체 배치(센서 32개, 온도 단위 1/256 °C, RTX 40의 핫스팟은 1번, 메모리 접합부는 7번 칸)는
 // LibreHardwareMonitor(MPL-2.0)의 NVAPI 선언을 공개 API 사실로 참고했다. 코드는 새로 작성했다.
-// 다른 세대(RTX 50 등)와 여러 GPU의 칸 순서는 이 PC에서 검증하지 못했다.
-internal sealed record NvapiThermal(int Index, string Name, int? HotSpotC, int? MemoryJunctionC);
+// 여러 GPU는 PCI 버스 번호(NvAPI_GPU_GetBusId)로 NVML 장치와 짝짓는다. 목록 순서는 버스 번호를 못 얻을 때만 쓴다.
+// 다른 세대(RTX 50 등)의 칸 배치는 이 PC에서 검증하지 못했다.
+internal sealed record NvapiThermal(int Index, string Name, int? HotSpotC, int? MemoryJunctionC, int? Bus);
 
 internal static class Nvapi
 {
     private const uint IdInitialize = 0x0150E828;
     private const uint IdEnumPhysicalGpus = 0xE5AC921F;
     private const uint IdGetThermalSensors = 0x65FE3AAD;
+    private const uint IdGetBusId = 0x1BE0B8E5;
     private const int MaxPhysicalGpus = 64;
     private const int ThermalSensorStructVersion = 2;
     private const int Ok = 0;
@@ -28,6 +30,9 @@ internal static class Nvapi
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int GetThermalSensorsDelegate(IntPtr handle, ref ThermalSensors sensors);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int GetBusIdDelegate(IntPtr handle, out uint busId);
 
     // NvThermalSensors: 버전, 마스크, 예약 8칸, 온도 32칸(1/256 °C 고정소수점). 크기는 168바이트다.
     [StructLayout(LayoutKind.Sequential)]
@@ -46,12 +51,13 @@ internal static class Nvapi
     private static InitializeDelegate? _initialize;
     private static EnumPhysicalGpusDelegate? _enumGpus;
     private static GetThermalSensorsDelegate? _getThermalSensors;
+    private static GetBusIdDelegate? _getBusId;
 
     // 마지막 상태(자체 검증과 진단용)
     internal static string Status { get; private set; } = "아직 호출하지 않음";
 
-    // nvidiaNames: NVML이 본 NVIDIA GPU 이름 순서. 시리즈(RTX 40 등)에 따라 온도 칸을 고르는 데 쓴다.
-    public static IReadOnlyList<NvapiThermal> ReadAll(IReadOnlyList<string> nvidiaNames)
+    // nvidia: NVML이 본 NVIDIA 장치. 버스 번호로 짝짓고, 시리즈(RTX 40 등)를 이름에서 고르는 데 쓴다.
+    public static IReadOnlyList<NvapiThermal> ReadAll(IReadOnlyList<GpuDetail> nvidia)
     {
         var list = new List<NvapiThermal>();
         if (_unavailable)
@@ -76,8 +82,11 @@ internal static class Nvapi
             Status = $"초기화 성공, NVAPI GPU {count}개";
             for (int i = 0; i < count; i++)
             {
-                string name = i < nvidiaNames.Count ? nvidiaNames[i] : "";
-                list.Add(ReadOne(i, handles[i], name));
+                int? bus = ReadBus(handles[i]);
+                GpuDetail? match = bus is int b
+                    ? nvidia.FirstOrDefault(d => d.PciBus == b)
+                    : i < nvidia.Count ? nvidia[i] : null;
+                list.Add(ReadOne(i, handles[i], match?.Name ?? "", bus));
             }
         }
         catch (DllNotFoundException)
@@ -104,6 +113,7 @@ internal static class Nvapi
         IntPtr initPtr = QueryInterface(IdInitialize);
         IntPtr enumPtr = QueryInterface(IdEnumPhysicalGpus);
         IntPtr sensorsPtr = QueryInterface(IdGetThermalSensors);
+        IntPtr busPtr = QueryInterface(IdGetBusId);
         if (initPtr == IntPtr.Zero || enumPtr == IntPtr.Zero || sensorsPtr == IntPtr.Zero)
         {
             Status = "NVAPI 함수 ID를 찾지 못함";
@@ -114,6 +124,8 @@ internal static class Nvapi
         _initialize = Marshal.GetDelegateForFunctionPointer<InitializeDelegate>(initPtr);
         _enumGpus = Marshal.GetDelegateForFunctionPointer<EnumPhysicalGpusDelegate>(enumPtr);
         _getThermalSensors = Marshal.GetDelegateForFunctionPointer<GetThermalSensorsDelegate>(sensorsPtr);
+        // 버스 번호 함수가 없으면 짝짓기만 목록 순서로 한다(온도는 그대로 읽는다).
+        _getBusId = busPtr == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<GetBusIdDelegate>(busPtr);
 
         int rc = _initialize();
         if (rc != Ok)
@@ -127,13 +139,24 @@ internal static class Nvapi
         return true;
     }
 
-    private static NvapiThermal ReadOne(int index, IntPtr handle, string name)
+    // PCI 버스 번호. 실패하면 null.
+    private static int? ReadBus(IntPtr handle)
+    {
+        if (_getBusId is null)
+        {
+            return null;
+        }
+
+        return _getBusId(handle, out uint bus) == Ok ? (int)bus : null;
+    }
+
+    private static NvapiThermal ReadOne(int index, IntPtr handle, string name, int? bus)
     {
         uint mask = FindSensorMask(handle);
         var sensors = NewSensors(mask);
         if (mask == 0 || _getThermalSensors!(handle, ref sensors) != Ok)
         {
-            return new NvapiThermal(index, name, null, null);
+            return new NvapiThermal(index, name, null, null, bus);
         }
 
         // RTX 50 계열은 핫스팟을 이 방식으로 주지 않는다(LibreHardwareMonitor 기준). 그 외는 1번 칸.
@@ -142,7 +165,7 @@ internal static class Nvapi
         int? hotSpot = rtx50 ? null : Celsius(sensors.Temperatures[1]);
         int memoryIndex = rtx50 ? 2 : rtx40 ? 7 : 9;
         int? memoryJunction = Celsius(sensors.Temperatures[memoryIndex]);
-        return new NvapiThermal(index, name, hotSpot, memoryJunction);
+        return new NvapiThermal(index, name, hotSpot, memoryJunction, bus);
     }
 
     // 센서 마스크: 비트를 0번부터 올리며 NVAPI가 거절하는 첫 비트 바로 아래까지 켠다(LibreHardwareMonitor와 같은 방식).

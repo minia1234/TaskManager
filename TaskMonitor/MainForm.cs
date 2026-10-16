@@ -138,8 +138,8 @@ internal sealed class MainForm : Form
         _dEnd = AddButton(_details, "작업 끝내기", () => EndSelected(false));
         _dEco = AddButton(_details, "효율성 모드", () => ToggleEcoSelected(_details));
         _sStart = AddButton(_services, "시작", () => ServiceAction("서비스 시작", ServiceList.Start));
-        _sStop = AddButton(_services, "중지", () => ServiceAction("서비스 중지", ServiceList.Stop));
-        _sRestart = AddButton(_services, "다시 시작", () => ServiceAction("서비스 다시 시작", ServiceList.Restart));
+        _sStop = AddButton(_services, "중지", () => ServiceAction("서비스 중지", ServiceList.Stop, confirm: true));
+        _sRestart = AddButton(_services, "다시 시작", () => ServiceAction("서비스 다시 시작", ServiceList.Restart, confirm: true));
         AddButton(_services, "서비스 열기", () => RunBackground("서비스 관리자 열기", () => Attempt(ServiceList.OpenServicesConsole)));
         _stEnable = AddButton(_startup, "사용", () => StartupAction(st => StartupItems.SetEnabled(st, true)));
         _stDisable = AddButton(_startup, "사용 안 함", () => StartupAction(st => StartupItems.SetEnabled(st, false)));
@@ -821,7 +821,7 @@ internal sealed class MainForm : Form
         foreach (var level in Enum.GetValues<PriorityLevel>())
         {
             var item = Item(ProcessActions.PriorityName(level), () =>
-                RunBackground("우선 순위 변경", () => CollectErrors(target, m => ProcessActions.SetPriority(m.Pid, level))));
+                RunBackground("우선 순위 변경", () => CollectErrors(target, m => ProcessActions.SetPriority(m.Key, level))));
             item.Checked = current == level;
             priority.DropDownItems.Add(item);
         }
@@ -847,8 +847,8 @@ internal sealed class MainForm : Form
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add(Item("시작", () => ServiceAction("서비스 시작", ServiceList.Start, service)));
-        menu.Items.Add(Item("중지", () => ServiceAction("서비스 중지", ServiceList.Stop, service)));
-        menu.Items.Add(Item("다시 시작", () => ServiceAction("서비스 다시 시작", ServiceList.Restart, service)));
+        menu.Items.Add(Item("중지", () => ServiceAction("서비스 중지", ServiceList.Stop, service, confirm: true)));
+        menu.Items.Add(Item("다시 시작", () => ServiceAction("서비스 다시 시작", ServiceList.Restart, service, confirm: true)));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(Item("온라인 검색", () => RunBackground("온라인 검색", () => Attempt(() => ProcessActions.SearchOnline(
             service.DisplayName.Length > 0 ? service.DisplayName : service.Name)))));
@@ -906,7 +906,7 @@ internal sealed class MainForm : Form
 
         if (!tree)
         {
-            RunBackground(title, () => CollectErrors(target, m => ProcessActions.EndTask(m.Pid)));
+            RunBackground(title, () => CollectErrors(target, m => ProcessActions.EndTask(m.Key)));
             return;
         }
 
@@ -917,7 +917,7 @@ internal sealed class MainForm : Form
             int failed = 0;
             foreach (var member in target.Members)
             {
-                failed += ProcessActions.EndTree(member.Pid, all);
+                failed += ProcessActions.EndTree(member, all);
             }
 
             return failed > 0 ? $"{failed}개 프로세스는 끝내지 못했습니다(권한 부족 또는 이미 종료됨)." : null;
@@ -938,7 +938,7 @@ internal sealed class MainForm : Form
         RunBackground("효율성 모드 변경", () =>
         {
             bool current = SafeGet(() => ProcessActions.IsEfficiencyMode(target.Members[0].Pid), false);
-            return CollectErrors(target, m => ProcessActions.SetEfficiencyMode(m.Pid, !current));
+            return CollectErrors(target, m => ProcessActions.SetEfficiencyMode(m.Key, !current));
         });
     }
 
@@ -959,7 +959,7 @@ internal sealed class MainForm : Form
         ulong? mask = Dialogs.Affinity(this, Environment.ProcessorCount, current);
         if (mask is { } chosen)
         {
-            RunBackground("선호도 변경", () => CollectErrors(target, m => ProcessActions.SetAffinity(m.Pid, chosen)));
+            RunBackground("선호도 변경", () => CollectErrors(target, m => ProcessActions.SetAffinity(m.Key, chosen)));
         }
     }
 
@@ -970,7 +970,7 @@ internal sealed class MainForm : Form
         string? path = null;
         RunBackground("덤프 파일 만들기", () =>
         {
-            path = ProcessActions.WriteDump(first.Pid, first.Name);
+            path = ProcessActions.WriteDump(first.Key, first.Name);
             return null;
         }, () =>
         {
@@ -1022,12 +1022,25 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void ServiceAction(string title, Action<string> action, ServiceRow? row = null)
+    // confirm: 중지와 다시 시작은 그 서비스를 쓰는 프로그램을 멈추게 하므로 먼저 묻는다.
+    private void ServiceAction(string title, Action<string> action, ServiceRow? row = null, bool confirm = false)
     {
         var service = row ?? _services.SelectedRow?.Tag as ServiceRow;
         if (service is null)
         {
             return;
+        }
+
+        if (confirm)
+        {
+            var answer = MessageBox.Show(this,
+                $"{service.DisplayName} ({service.Name})에 대해 \"{title}\" 작업을 진행할까요?{Environment.NewLine}" +
+                "이 서비스를 쓰는 프로그램은 잠깐 동작을 멈출 수 있습니다.",
+                title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (answer != DialogResult.Yes)
+            {
+                return;
+            }
         }
 
         // 서비스 시작과 중지는 몇 초에서 최대 15초까지 걸릴 수 있다. UI 스레드에서 기다리면 화면이 멈춘다.

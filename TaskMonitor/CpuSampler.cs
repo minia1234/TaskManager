@@ -14,7 +14,11 @@ internal sealed record ProcessUsage(
     int Threads,
     int Handles,
     int SessionId,
-    long CreateTime);
+    long CreateTime)
+{
+    // 종료 작업이 PID 재사용을 가려내도록 생성 시각과 함께 넘긴다.
+    public ProcessKey Key => new(Pid, CreateTime);
+}
 
 internal sealed record ExitedProcess(int Pid, string Name, double LastCpuPercent, DateTime ExitedAt);
 

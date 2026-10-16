@@ -41,7 +41,10 @@ internal sealed record GpuDetail(
     long? ThrottleReasons,
     IReadOnlyList<GpuEncoderSession> EncoderSessions,
     int? HotSpotC,
-    int? MemoryJunctionC);
+    int? MemoryJunctionC,
+    // PCI 버스·장치 번호: GPU의 물리 위치. PDH 카드(LUID)와 NVAPI 온도를 짝짓는 기준이다. NVIDIA가 아니면 없다.
+    int? PciBus = null,
+    int? PciDevice = null);
 
 internal static class Nvml
 {
@@ -118,6 +121,12 @@ internal static class Nvml
     [DllImport("nvml.dll")] private static extern int nvmlDeviceGetGraphicsRunningProcesses_v3(IntPtr device, ref uint count, [In, Out] ProcessInfo[]? infos);
     [DllImport("nvml.dll")] private static extern int nvmlDeviceGetCurrentClocksEventReasons(IntPtr device, out ulong reasons);
     [DllImport("nvml.dll")] private static extern int nvmlDeviceGetEncoderSessions(IntPtr device, ref uint sessionCount, [In, Out] EncoderSessionInfo[]? infos);
+    [DllImport("nvml.dll")] private static extern int nvmlDeviceGetPciInfo_v3(IntPtr device, IntPtr info);
+
+    // nvmlPciInfo_t 크기는 넉넉히 잡는다. 버스·장치 번호는 domain 다음 칸(오프셋 20, 24)에 있다.
+    private const int PciInfoBufferSize = 256;
+    private const int PciBusOffset = 20;
+    private const int PciDeviceOffset = 24;
 
     private static bool _initialized;
 
@@ -202,6 +211,7 @@ internal static class Nvml
         int? pcieMaxWidth = ToInt(nvmlDeviceGetMaxPcieLinkWidth(device, out uint pmw), pmw);
         long? tx = ToLong(nvmlDeviceGetPcieThroughput(device, PcieTx, out uint txv), txv);
         long? rx = ToLong(nvmlDeviceGetPcieThroughput(device, PcieRx, out uint rxv), rxv);
+        var pci = PciLocation(device);
 
         return new GpuDetail(
             name.ToString(),
@@ -232,7 +242,32 @@ internal static class Nvml
             ThrottleReasons(device),
             EncoderSessions(device),
             null,
-            null);
+            null,
+            pci?.Bus,
+            pci?.Device);
+    }
+
+    // PCI 위치(버스, 장치). 드라이버가 오래되어 함수가 없으면 null.
+    private static (int Bus, int Device)? PciLocation(IntPtr device)
+    {
+        IntPtr buffer = Marshal.AllocHGlobal(PciInfoBufferSize);
+        try
+        {
+            if (nvmlDeviceGetPciInfo_v3(device, buffer) != Success)
+            {
+                return null;
+            }
+
+            return (Marshal.ReadInt32(buffer, PciBusOffset), Marshal.ReadInt32(buffer, PciDeviceOffset));
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
     }
 
     // 클럭이 제한되는 이유(비트 마스크). 값의 뜻은 NVML의 clocks event reason 상수와 같다.
@@ -371,60 +406,81 @@ internal static class GpuDetailMonitor
 
     public static IReadOnlyList<GpuDetail> Latest => Volatile.Read(ref _latest);
 
-    // PDH의 GPU 카드와 NVML 장치를 짝짓는다. 카드 이름에 드라이버 이름이 있으면 그것으로 맞추고,
-    // 맞추지 못한 카드와 장치가 하나씩 남으면 둘을 맞춘다(PDH 카드 이름은 "GPU 0"처럼 하드웨어 번호만 있을 수 있다).
+    // PDH의 GPU 카드와 장치를 짝짓는다.
+    //  1) 카드 LUID → PCI 위치(버스·장치 번호)가 장치의 PCI 위치와 같으면 짝이다. 카드 순서나 이름에 기대지 않는다.
+    //  2) 위치를 알 수 없는 카드는 드라이버 이름이 카드 이름에 들어 있으면 그것으로 맞춘다.
+    //  3) 그래도 남은 카드와 장치는 전용 메모리 사용량이 가장 가까운 쌍으로 맞춘다(오차 256MB 또는 20% 이내일 때만).
     public static IReadOnlyDictionary<string, GpuDetail> Assign(IReadOnlyList<GpuStats> cards)
     {
         var devices = Latest.ToList();
         var result = new Dictionary<string, GpuDetail>();
-        var unmatched = new List<GpuStats>();
+        var unlocated = new List<GpuStats>();
         foreach (var card in cards)
+        {
+            // 위치가 NVML 장치와 맞지 않는 카드(예: AMD)는 다음 단계로 넘긴다.
+            var byLocation = GpuLocation.Find(card.Luid) is { } location
+                ? devices.FirstOrDefault(d => d.PciBus == location.Bus && d.PciDevice == location.Device)
+                : null;
+            if (byLocation is not null)
+            {
+                result[card.Name] = byLocation;
+                devices.Remove(byLocation);
+            }
+            else
+            {
+                unlocated.Add(card);
+            }
+        }
+
+        foreach (var card in unlocated.ToList())
         {
             var named = devices.FirstOrDefault(d =>
                 card.Name.Contains(d.Name, StringComparison.OrdinalIgnoreCase) || d.Name.Contains(card.Name, StringComparison.OrdinalIgnoreCase));
             if (named is null)
             {
-                unmatched.Add(card);
                 continue;
             }
 
             result[card.Name] = named;
             devices.Remove(named);
+            unlocated.Remove(card);
         }
 
-        // 이름으로 맞추지 못한 장치는 전용 메모리 사용량이 가장 가까운 카드와 맞춘다(오차 256MB 또는 20% 이내일 때만).
         foreach (var device in devices)
         {
             long used = device.VramUsedBytes ?? 0;
-            var best = unmatched.OrderBy(c => Math.Abs(c.DedicatedUsed - used)).FirstOrDefault();
+            var best = unlocated.OrderBy(c => Math.Abs(c.DedicatedUsed - used)).FirstOrDefault();
             if (best is null || Math.Abs(best.DedicatedUsed - used) > Math.Max(256L * 1024 * 1024, used * 0.2))
             {
                 continue;
             }
 
             result[best.Name] = device;
-            unmatched.Remove(best);
+            unlocated.Remove(best);
         }
 
         return result;
     }
 
-    // NVAPI가 준 핫스팟·접합부 온도를 NVIDIA 장치에 순서대로 붙인다(NVML 장치 순서와 NVAPI 물리 GPU 순서가 같다고 가정).
+    // NVAPI 온도를 NVIDIA 장치에 붙인다. 버스 번호를 알면 같은 버스의 장치끼리 맞춘다.
+    // 버스 번호를 못 얻은 경우에만 목록 순서에 기대는 예전 방식을 쓴다.
     private static IReadOnlyList<GpuDetail> MergeThermal(IReadOnlyList<GpuDetail> devices, IReadOnlyList<NvapiThermal> thermal)
     {
+        bool byBus = thermal.Any(t => t.Bus is not null);
         var result = new List<GpuDetail>();
         int next = 0;
         foreach (var device in devices)
         {
-            if (device.Name.StartsWith("NVIDIA", StringComparison.OrdinalIgnoreCase) && next < thermal.Count)
-            {
-                var t = thermal[next++];
-                result.Add(device with { HotSpotC = t.HotSpotC, MemoryJunctionC = t.MemoryJunctionC });
-            }
-            else
+            if (!device.Name.StartsWith("NVIDIA", StringComparison.OrdinalIgnoreCase))
             {
                 result.Add(device);
+                continue;
             }
+
+            NvapiThermal? t = byBus
+                ? thermal.FirstOrDefault(x => device.PciBus is int bus && x.Bus == bus)
+                : next < thermal.Count ? thermal[next++] : null;
+            result.Add(t is null ? device : device with { HotSpotC = t.HotSpotC, MemoryJunctionC = t.MemoryJunctionC });
         }
 
         return result;
@@ -444,8 +500,8 @@ internal static class GpuDetailMonitor
                 try
                 {
                     var devices = Nvml.ReadAll().Concat(Adl.ReadAll()).ToList();
-                    var nvidiaNames = devices.Where(d => d.Name.StartsWith("NVIDIA", StringComparison.OrdinalIgnoreCase)).Select(d => d.Name).ToList();
-                    Volatile.Write(ref _latest, MergeThermal(devices, Nvapi.ReadAll(nvidiaNames)));
+                    var nvidia = devices.Where(d => d.Name.StartsWith("NVIDIA", StringComparison.OrdinalIgnoreCase)).ToList();
+                    Volatile.Write(ref _latest, MergeThermal(devices, Nvapi.ReadAll(nvidia)));
                 }
                 catch (Exception)
                 {

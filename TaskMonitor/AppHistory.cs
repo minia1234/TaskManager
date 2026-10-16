@@ -3,8 +3,9 @@ using System.Text.Json;
 
 namespace TaskMonitor;
 
-// 앱 기록: 프로그램(실행 파일 이름)별로 CPU 시간과 디스크 입출력 양을 시작 이후(또는 기록 지우기 이후) 누적한다.
-// 값은 샘플링 주기마다 CPU 사용률·디스크 속도에 경과 시간을 곱해 더한다. 네트워크 사용량은 Windows 기록(ETW)이 필요해서 제공하지 않는다.
+// 앱 기록: 프로그램(실행 파일 이름)별로 CPU 시간과 I/O 전송량을 시작 이후(또는 기록 지우기 이후) 누적한다.
+// I/O 전송량은 프로세스가 주고받은 모든 I/O 바이트(파일, 네트워크, 파이프 포함)라서 디스크 전용 값이 아니다.
+// 값은 샘플링 주기마다 CPU 사용률·I/O 속도에 경과 시간을 곱해 더한다. 네트워크 사용량만 따로 떼어 내려면 Windows 기록(ETW)이 필요해서 제공하지 않는다.
 // %LOCALAPPDATA%\TaskMonitor\app-history.json 에 저장해서 다음 실행에도 이어서 쓴다.
 internal sealed class AppHistory
 {

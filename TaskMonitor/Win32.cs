@@ -136,6 +136,13 @@ internal static class Win32
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern bool CloseHandle(IntPtr handle);
 
+    // 열린 핸들이 가리키는 프로세스의 생성 시각(FILETIME, 100ns 단위). PID 재사용을 가려낼 때 쓴다.
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern bool SetPriorityClass(IntPtr process, uint priorityClass);
 

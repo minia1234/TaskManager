@@ -87,12 +87,36 @@ internal static class SelfTest
 
         Check("부모-자식 관계", child.ParentPid == parent.Id, $"ping {child.Pid} parent {child.ParentPid}");
 
+        // PID와 생성 시각: 목록의 생성 시각과 열린 핸들의 생성 시각이 같아야 한다.
+        var childKey = ProcessActions.KeyOf(child.Pid);
+        Check("생성 시각 일치(PID 재사용 가드 기준)", childKey.CreateTime == child.CreateTime, $"ping {child.Pid}");
+
+        // 다른 생성 시각(= 같은 PID의 다른 프로그램)이면 우선 순위를 바꾸지 않고 거부해야 한다.
         try
         {
-            ProcessActions.SetPriority(child.Pid, PriorityLevel.BelowNormal);
+            bool refused = false;
+            try
+            {
+                ProcessActions.SetPriority(new ProcessKey(childKey.Pid, childKey.CreateTime - 1), PriorityLevel.Idle);
+            }
+            catch (InvalidOperationException)
+            {
+                refused = true;
+            }
+
+            Check("PID 재사용 가드(다른 생성 시각은 거부)", refused && ProcessActions.GetPriority(child.Pid) == PriorityLevel.Normal, $"거부 {refused}");
+        }
+        catch (Exception ex)
+        {
+            Check("PID 재사용 가드(다른 생성 시각은 거부)", false, ex.Message);
+        }
+
+        try
+        {
+            ProcessActions.SetPriority(childKey, PriorityLevel.BelowNormal);
             var pri = ProcessActions.GetPriority(child.Pid);
             Check("우선 순위 설정/조회", pri == PriorityLevel.BelowNormal, pri.ToString());
-            ProcessActions.SetPriority(child.Pid, PriorityLevel.Normal);
+            ProcessActions.SetPriority(childKey, PriorityLevel.Normal);
         }
         catch (Exception ex)
         {
@@ -102,10 +126,10 @@ internal static class SelfTest
         try
         {
             ulong all = (1UL << Math.Min(Environment.ProcessorCount, 63)) - 1;
-            ProcessActions.SetAffinity(child.Pid, 0x1);
+            ProcessActions.SetAffinity(childKey, 0x1);
             ulong one = ProcessActions.GetAffinity(child.Pid);
             Check("선호도 설정/조회 (CPU 0만)", one == 0x1, $"mask=0x{one:X}");
-            ProcessActions.SetAffinity(child.Pid, all);
+            ProcessActions.SetAffinity(childKey, all);
         }
         catch (Exception ex)
         {
@@ -114,10 +138,10 @@ internal static class SelfTest
 
         try
         {
-            ProcessActions.SetEfficiencyMode(child.Pid, true);
+            ProcessActions.SetEfficiencyMode(childKey, true);
             bool on = ProcessActions.IsEfficiencyMode(child.Pid);
             Check("효율 모드 켜기", on, $"throttled={on}, priority={ProcessActions.GetPriority(child.Pid)}, raw={RawThrottle(child.Pid)}");
-            ProcessActions.SetEfficiencyMode(child.Pid, false);
+            ProcessActions.SetEfficiencyMode(childKey, false);
             bool off = !ProcessActions.IsEfficiencyMode(child.Pid);
             Check("효율 모드 끄기", off, $"throttled={!off}");
         }
@@ -126,9 +150,26 @@ internal static class SelfTest
             Check("효율 모드", false, ex.Message);
         }
 
+        // 효율 모드를 끄면 켜기 전 우선 순위(낮음)로 돌아가야 한다. 켜져 있는 동안은 낮음(Idle)이다.
         try
         {
-            string dump = ProcessActions.WriteDump(child.Pid, child.Name);
+            ProcessActions.SetPriority(childKey, PriorityLevel.BelowNormal);
+            ProcessActions.SetEfficiencyMode(childKey, true);
+            var whileOn = ProcessActions.GetPriority(child.Pid);
+            ProcessActions.SetEfficiencyMode(childKey, false);
+            var afterOff = ProcessActions.GetPriority(child.Pid);
+            Check("효율 모드 해제 시 이전 우선 순위 복원", whileOn == PriorityLevel.Idle && afterOff == PriorityLevel.BelowNormal,
+                $"켠 동안 {whileOn}, 끈 뒤 {afterOff}");
+            ProcessActions.SetPriority(childKey, PriorityLevel.Normal);
+        }
+        catch (Exception ex)
+        {
+            Check("효율 모드 해제 시 이전 우선 순위 복원", false, ex.Message);
+        }
+
+        try
+        {
+            string dump = ProcessActions.WriteDump(childKey, child.Name);
             var size = new FileInfo(dump).Length;
             Check("덤프 파일 만들기", size > 0, $"{dump} ({size} bytes)");
             File.Delete(dump);
@@ -140,7 +181,8 @@ internal static class SelfTest
 
         Check("창이 없는 프로세스 전환", !ProcessActions.SwitchTo(child.Pid), "보이는 창이 없으면 false");
 
-        int treeFailures = ProcessActions.EndTree(parent.Id, snap2!.Processes);
+        var parentUsage = snap2!.Processes.FirstOrDefault(p => p.Pid == parent.Id);
+        int treeFailures = parentUsage is null ? -1 : ProcessActions.EndTree(parentUsage, snap2.Processes);
         Thread.Sleep(800);
         bool parentGone = parent.HasExited;
         Check("작업 트리 끝내기", treeFailures == 0 && parentGone, $"failures={treeFailures} parentExited={parentGone}");
@@ -348,8 +390,9 @@ internal static class SelfTest
         try
         {
             Check("NVAPI 구조체 크기(168바이트)", Nvapi.ThermalSensorsSize() == 168, $"{Nvapi.ThermalSensorsSize()}바이트");
-            var nv = Nvapi.ReadAll(new[] { "NVIDIA GeForce RTX 4070 SUPER" });
             var nvml = Nvml.ReadAll();
+            var nvidia = nvml.Where(d => d.Name.StartsWith("NVIDIA", StringComparison.OrdinalIgnoreCase)).ToList();
+            var nv = Nvapi.ReadAll(nvidia);
             string detail = Nvapi.Status + "; " + string.Join("; ", nv.Select(n =>
                 $"#{n.Index} 핫스팟 {n.HotSpotC?.ToString() ?? "-"}°C 메모리 접합부 {n.MemoryJunctionC?.ToString() ?? "-"}°C"));
             int? core = nvml.FirstOrDefault()?.TemperatureC;
@@ -359,6 +402,28 @@ internal static class SelfTest
         catch (Exception ex)
         {
             Check("NVAPI 핫스팟·메모리 접합부 온도", false, ex.Message);
+        }
+
+        // GPU 식별: PDH 카드의 LUID를 PCI 위치로 바꾸면 NVML 장치와 맞아야 하고, NVAPI 버스 번호도 NVML과 같아야 한다.
+        // NVIDIA GPU가 없으면 통과(정보용)한다.
+        try
+        {
+            using var identityPerf = new SystemPerf();
+            identityPerf.Sample();
+            var cards = identityPerf.Sample().Gpus;
+            var nvidia = Nvml.ReadAll().Where(d => d.Name.StartsWith("NVIDIA", StringComparison.OrdinalIgnoreCase)).ToList();
+            var nvapi = Nvapi.ReadAll(nvidia);
+            int matched = nvidia.Count(d => cards.Any(card =>
+                GpuLocation.Find(card.Luid) is { } loc && d.PciBus == loc.Bus && d.PciDevice == loc.Device));
+            Check("GPU 위치 일치(LUID→PCI가 NVML 장치와 맞음)", nvidia.Count == 0 || matched == nvidia.Count,
+                $"NVIDIA {nvidia.Count}개 중 {matched}개 짝지음, 카드 {cards.Count}개");
+            bool busAgrees = nvapi.Any(n => n.Bus is not null) && nvapi.All(n => n.Bus is null || nvidia.Any(d => d.PciBus == n.Bus));
+            Check("NVAPI 버스 번호가 NVML과 일치", nvidia.Count == 0 || busAgrees,
+                $"NVAPI 버스 {string.Join(", ", nvapi.Select(n => n.Bus?.ToString() ?? "-"))}, NVML 버스 {string.Join(", ", nvidia.Select(d => d.PciBus?.ToString() ?? "-"))}");
+        }
+        catch (Exception ex)
+        {
+            Check("GPU 위치 일치(LUID→PCI가 NVML 장치와 맞음)", false, ex.Message);
         }
 
         // 프로세스별 VRAM: GPU Process Memory 카운터(문서화된 WDDM 카운터)

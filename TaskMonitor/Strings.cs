@@ -94,7 +94,7 @@ internal static class Strings
         ["ID"] = "ID",
         ["세션 이름"] = "Session name",
         ["CPU 시간"] = "CPU time",
-        ["디스크 입출력"] = "Disk I/O",
+        ["I/O 전송량"] = "I/O transfer",
         ["네트워크"] = "Network",
         ["측정 시작"] = "Since",
         ["마지막 갱신 {0}   |   프로세스 {1}개   |   기록 파일: {2}"] = "Last update {0}   |   {1} processes   |   Log file: {2}",
