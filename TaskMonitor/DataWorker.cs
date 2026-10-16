@@ -31,6 +31,8 @@ internal sealed class DataWorker : IDisposable
     private readonly ResourceLog _resources = new(Path.Combine(RecordFolder.Path, "resource-log.jsonl"));
     private readonly ProcessEventTracker _tracker = new();
     private readonly AlertRules _alerts = new();
+    private readonly GameSessionTracker _games = new();
+    private volatile bool _alertsOnly;
     private DateTime _lastResourceWrite = DateTime.MinValue;
     private int _activityShown = -1;
 
@@ -96,6 +98,14 @@ internal sealed class DataWorker : IDisposable
         _grouped = grouped;
         _logEnabled = logEnabled;
         _threshold = threshold;
+        _rebuildRequested = true;
+        _wake.Set();
+    }
+
+    // 이벤트 페이지: 경고만 보여 줄지.
+    public void SetAlertsOnly(bool alertsOnly)
+    {
+        _alertsOnly = alertsOnly;
         _rebuildRequested = true;
         _wake.Set();
     }
@@ -192,7 +202,8 @@ internal sealed class DataWorker : IDisposable
                         break;
                     case MainForm.PageEvents when rebuild || _activity.Version != _activityShown || GetRows(page) is null:
                         _activityShown = _activity.Version;
-                        SetRows(page, RunStage("이벤트 행", () => RowBuilders.Activity(_activity.Recent())));
+                        SetRows(page, RunStage("이벤트 행", () => RowBuilders.Activity(
+                            _alertsOnly ? _activity.Recent().Where(e => e.Kind == ActivityLog.Alert).ToList() : _activity.Recent())));
                         break;
                     case MainForm.PageHistory when rebuild || GetRows(page) is null:
                         SetRows(page, RunStage("앱 기록 행", () => RowBuilders.History(_history.Snapshot())));
@@ -224,9 +235,11 @@ internal sealed class DataWorker : IDisposable
 
         var events = _tracker.Update(snap.Processes, now);
         var alerts = _alerts.Evaluate(now, snap, perf, gpus, DiskHealthMonitor.Latest);
-        var recorded = new List<ActivityEvent>(events.Count + alerts.Count);
+        var games = _games.Update(now, snap, perf, gpus, Win32.ForegroundWindowState());
+        var recorded = new List<ActivityEvent>(events.Count + alerts.Count + games.Count);
         recorded.AddRange(events);
         recorded.AddRange(alerts);
+        recorded.AddRange(games);
         _activity.Add(recorded);
         if (alerts.Count > 0)
         {

@@ -234,6 +234,48 @@ internal static class Win32
     [DllImport("advapi32.dll", SetLastError = true)]
     internal static extern bool CloseServiceHandle(IntPtr handle);
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
+
+    private const int SmCxScreen = 0;
+    private const int SmCyScreen = 1;
+
+    // 앞 창의 프로세스 ID와, 그 창이 주 화면 전체를 덮는지(전체 화면). 창이 없으면 (0, false).
+    internal static (int ProcessId, bool Fullscreen) ForegroundWindowState()
+    {
+        IntPtr hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero)
+        {
+            return (0, false);
+        }
+
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        if (!GetWindowRect(hwnd, out var rect))
+        {
+            return ((int)pid, false);
+        }
+
+        bool fullscreen = rect.Left <= 0 && rect.Top <= 0
+            && rect.Right - rect.Left >= GetSystemMetrics(SmCxScreen)
+            && rect.Bottom - rect.Top >= GetSystemMetrics(SmCyScreen);
+        return ((int)pid, fullscreen);
+    }
+
     // 현재 프로세스 PID의 창 중 보이는 첫 창을 찾는다.
     internal static IntPtr FindVisibleWindow(int processId)
     {

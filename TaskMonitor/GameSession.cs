@@ -1,0 +1,111 @@
+namespace TaskMonitor;
+
+// 게임 세션 분석: 앞 창이 주 화면 전체를 덮고 GPU 3D 엔진 사용률이 30% 이상인 상태가 10초 이어지면 세션을 시작한다.
+// 그 상태가 10초 동안 끊기면 세션을 끝내고, CPU·GPU·온도·VRAM·클럭 제한 요약을 활동 기록에 남긴다.
+// 프레임 속도와 프레임 시간은 측정하지 않는다. 그 값은 PresentMon 같은 ETW 기반 도구가 필요하다.
+internal sealed class GameSessionTracker
+{
+    private static readonly TimeSpan Confirm = TimeSpan.FromSeconds(10);
+    private const double GpuLimit = 30;
+
+    private sealed class Session
+    {
+        public required string Name { get; init; }
+        public required int Pid { get; init; }
+        public required DateTime Start { get; init; }
+        public int Samples;
+        public double CpuSum;
+        public double CpuMax;
+        public double GpuSum;
+        public double GpuMax;
+        public int? TempMax;
+        public long VramMax;
+        public int ThrottledSamples;
+    }
+
+    private Session? _current;
+    private DateTime? _candidateSince;
+    private DateTime? _leftSince;
+
+    // 샘플링 때마다 호출한다. 세션이 시작되거나 끝날 때만 활동 기록 항목을 돌려준다.
+    // foreground: 앞 창의 프로세스 ID와 전체 화면 여부(Win32.ForegroundWindowState). 자체 검증에서 직접 넣을 수 있게 밖에서 받는다.
+    public IReadOnlyList<ActivityEvent> Update(DateTime now, Snapshot snapshot, PerfSnapshot perf, IReadOnlyList<GpuDetail> gpus,
+        (int ProcessId, bool Fullscreen) foreground)
+    {
+        var events = new List<ActivityEvent>();
+        var (pid, fullscreen) = foreground;
+        var usage = pid > 0 ? snapshot.Processes.FirstOrDefault(p => p.Pid == pid) : null;
+        double gpu3d = perf.Gpus.Count > 0 ? perf.Gpus.Max(g => g.Engines.GetValueOrDefault("3D")) : 0;
+        bool candidate = fullscreen && usage is not null && pid != Environment.ProcessId
+            && !usage.Name.Equals("explorer.exe", StringComparison.OrdinalIgnoreCase) && gpu3d >= GpuLimit;
+
+        if (_current is null)
+        {
+            if (!candidate || usage is null)
+            {
+                _candidateSince = null;
+                return events;
+            }
+
+            _candidateSince ??= now;
+            if (now - _candidateSince.Value < Confirm)
+            {
+                return events;
+            }
+
+            _current = new Session { Name = usage.Name, Pid = pid, Start = now };
+            _candidateSince = null;
+            events.Add(new ActivityEvent(now, ActivityLog.Game, usage.Name, $"시작 (PID {pid})", pid));
+        }
+
+        var session = _current;
+        Accumulate(session, snapshot, gpu3d, gpus);
+        if (candidate && pid == session.Pid)
+        {
+            _leftSince = null;
+            return events;
+        }
+
+        _leftSince ??= now;
+        if (now - _leftSince.Value < Confirm)
+        {
+            return events;
+        }
+
+        events.Add(new ActivityEvent(now, ActivityLog.Game, session.Name, Summary(session, now), session.Pid));
+        _current = null;
+        _leftSince = null;
+        return events;
+    }
+
+    private static void Accumulate(Session s, Snapshot snapshot, double gpu3d, IReadOnlyList<GpuDetail> gpus)
+    {
+        s.Samples++;
+        s.CpuSum += snapshot.TotalCpuPercent;
+        s.CpuMax = Math.Max(s.CpuMax, snapshot.TotalCpuPercent);
+        s.GpuSum += gpu3d;
+        s.GpuMax = Math.Max(s.GpuMax, gpu3d);
+        if (gpus.Select(g => g.TemperatureC).Max() is int temp)
+        {
+            s.TempMax = Math.Max(s.TempMax ?? temp, temp);
+        }
+
+        s.VramMax = Math.Max(s.VramMax, gpus.Sum(g => g.VramUsedBytes ?? 0));
+        if (gpus.Any(g => (g.ThrottleReasons ?? 0) != 0))
+        {
+            s.ThrottledSamples++;
+        }
+    }
+
+    private static string Summary(Session s, DateTime end)
+    {
+        double n = Math.Max(1, s.Samples);
+        string temp = s.TempMax is { } t ? $"{t}°C" : "-";
+        return $"끝 (PID {s.Pid}) {FormatSpan(end - s.Start)}, CPU 평균 {s.CpuSum / n:F0}%·최고 {s.CpuMax:F0}%, "
+            + $"GPU 3D 평균 {s.GpuSum / n:F0}%·최고 {s.GpuMax:F0}%, GPU 온도 최고 {temp}, "
+            + $"VRAM 최고 {s.VramMax / 1073741824.0:F1}GB, 클럭 제한 {s.ThrottledSamples}회(샘플 {s.Samples}개)";
+    }
+
+    private static string FormatSpan(TimeSpan span) =>
+        span.TotalHours >= 1 ? $"{(int)span.TotalHours}시간 {span.Minutes}분" : $"{span.Minutes}분 {span.Seconds}초";
+}

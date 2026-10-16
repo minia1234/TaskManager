@@ -93,6 +93,8 @@ internal sealed class MainForm : Form
     private readonly ToolStripButton _uDisconnect;
     private readonly ToolStripButton _uLogoff;
     private readonly ToolStripButton _uMessage;
+    private readonly ToolStripButton _alertsButton;
+    private bool _alertsOnlyOn;
 
     private int _currentPage = PageProcesses;
     private Snapshot? _last;
@@ -152,6 +154,7 @@ internal sealed class MainForm : Form
         _uMessage = AddButton(_users, "메시지 보내기", SendUserMessage);
         AddButton(_historyPage, "기록 지우기", ResetHistory);
         AddButton(_eventsPage, "기록 폴더 열기", OpenRecordsFolder);
+        _alertsButton = AddButton(_eventsPage, "경고만 보기", ToggleAlertsOnly);
 
         BuildHeader();
         BuildStatusBar();
@@ -433,6 +436,7 @@ internal sealed class MainForm : Form
         var records = new ToolStripMenuItem("기록");
         records.DropDownItems.Add(Item("원인 분석 리포트 만들기 (최근 1시간)", CreateCauseReport));
         records.DropDownItems.Add(Item("기록 내보내기 (CSV)...", ExportRecords));
+        records.DropDownItems.Add(Item("기록 비교...", OpenComparison));
         records.DropDownItems.Add(new ToolStripSeparator());
         records.DropDownItems.Add(Item("기록 폴더 열기", OpenRecordsFolder));
 
@@ -1109,6 +1113,26 @@ internal sealed class MainForm : Form
                 ProcessActions.OpenFileLocation(Path.Combine(folder, "resource-log.csv"));
             }
         });
+    }
+
+    // 이벤트 페이지: 경고만 보기 전환. 버튼 글자가 현재 상태를 보여 준다.
+    private void ToggleAlertsOnly()
+    {
+        _alertsOnlyOn = !_alertsOnlyOn;
+        _alertsButton.Checked = _alertsOnlyOn;
+        _alertsButton.Text = Strings.Localize(_alertsOnlyOn ? "모두 보기" : "경고만 보기");
+        _worker?.SetAlertsOnly(_alertsOnlyOn);
+    }
+
+    private void OpenComparison()
+    {
+        if (_worker is not { } worker)
+        {
+            MessageBox.Show(this, "아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요.", "기록 비교", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        new RecordComparisonForm(worker.Resources, worker.Activity).Show(this);
     }
 
     private void OpenRecordsFolder()

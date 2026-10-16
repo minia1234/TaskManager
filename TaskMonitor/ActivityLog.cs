@@ -18,6 +18,7 @@ internal sealed class ActivityLog
     public const string Start = "start";
     public const string Exit = "exit";
     public const string Alert = "alert";
+    public const string Game = "game";
 
     private const int RecentCapacity = 2000;
     private const long MaxFileBytes = 10L * 1024 * 1024;
@@ -160,13 +161,37 @@ internal sealed class AlertRules
     private const int Hysteresis = 5;
     private static readonly TimeSpan CpuSustain = TimeSpan.FromSeconds(20);
 
+    private const double ProcessCpuLimit = 50;
+
     private readonly Dictionary<string, bool> _active = new();
+    private readonly Dictionary<ProcessKey, DateTime> _hotSince = new();
+    private readonly HashSet<ProcessKey> _hotAlerted = new();
     private DateTime? _cpuHighSince;
 
     public IReadOnlyList<ActivityEvent> Evaluate(
         DateTime now, Snapshot snapshot, PerfSnapshot perf, IReadOnlyList<GpuDetail> gpus, IReadOnlyDictionary<int, DiskHealthInfo> disks)
     {
         var alerts = new List<ActivityEvent>();
+
+        // 프로세스 하나가 전체 CPU의 50% 이상을 20초 넘게 쓰면 한 번 경고한다. 그 프로세스가 내려가거나 끝나면 다시 울릴 수 있다.
+        var hot = snapshot.Processes.Where(p => p.CpuPercent >= ProcessCpuLimit).ToList();
+        foreach (var p in hot)
+        {
+            _hotSince.TryAdd(p.Key, now);
+            if (!_hotAlerted.Contains(p.Key) && now - _hotSince[p.Key] >= CpuSustain)
+            {
+                _hotAlerted.Add(p.Key);
+                alerts.Add(new ActivityEvent(now, ActivityLog.Alert, "프로세스 CPU 급증",
+                    $"{p.Name}({p.Pid}) {p.CpuPercent:F0}% (전체 CPU 50% 이상 20초 지속)", p.Pid));
+            }
+        }
+
+        var hotKeys = hot.Select(p => p.Key).ToHashSet();
+        foreach (var key in _hotSince.Keys.Where(k => !hotKeys.Contains(k)).ToList())
+        {
+            _hotSince.Remove(key);
+            _hotAlerted.Remove(key);
+        }
 
         // CPU: 기준 이상이 지속된 시간이 20초를 넘으면 경고 상태로 본다.
         if (snapshot.TotalCpuPercent >= CpuPercentLimit)

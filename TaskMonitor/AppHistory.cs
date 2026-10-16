@@ -15,7 +15,8 @@ internal sealed class AppHistory
         public double IoBytes { get; set; }
     }
 
-    internal sealed record Row(string Name, double CpuSeconds, double IoBytes, DateTime Since);
+    // Path: 실행 파일 경로. 경로를 못 얻은 옛 기록(이름만 키로 쓴 것)은 빈 문자열이다.
+    internal sealed record Row(string Name, string Path, double CpuSeconds, double IoBytes, DateTime Since);
 
     private sealed class Saved
     {
@@ -28,6 +29,7 @@ internal sealed class AppHistory
 
     private readonly object _gate = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly Dictionary<ProcessKey, string> _paths = new();
     private Saved _data = new();
     private double _lastTime = double.NaN;
 
@@ -61,7 +63,9 @@ internal sealed class AppHistory
                 return;
             }
 
-            foreach (var group in processes.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+            var keyed = processes.Select(p => (Key: KeyOf(p), Process: p)).ToList();
+            PruneKeys(processes);
+            foreach (var group in keyed.GroupBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
             {
                 if (!_data.Apps.TryGetValue(group.Key, out var entry))
                 {
@@ -69,8 +73,8 @@ internal sealed class AppHistory
                     _data.Apps[group.Key] = entry;
                 }
 
-                double cpu = group.Sum(p => p.CpuPercent) / 100.0 * logicalProcessors * elapsed;
-                double io = group.Sum(p => p.DiskBytesPerSec) * elapsed;
+                double cpu = group.Sum(k => k.Process.CpuPercent) / 100.0 * logicalProcessors * elapsed;
+                double io = group.Sum(k => k.Process.DiskBytesPerSec) * elapsed;
                 entry.CpuSeconds += cpu;
                 entry.IoBytes += io;
             }
@@ -83,9 +87,36 @@ internal sealed class AppHistory
         {
             return _data.Apps
                 .Where(kv => kv.Value.CpuSeconds > 0 || kv.Value.IoBytes > 0)
-                .Select(kv => new Row(kv.Key, kv.Value.CpuSeconds, kv.Value.IoBytes, _data.Since))
+                .Select(kv =>
+                {
+                    bool hasPath = kv.Key.Contains('\\');
+                    string name = hasPath ? System.IO.Path.GetFileName(kv.Key) : kv.Key;
+                    return new Row(name, hasPath ? kv.Key : "", kv.Value.CpuSeconds, kv.Value.IoBytes, _data.Since);
+                })
                 .OrderByDescending(r => r.CpuSeconds)
                 .ToList();
+        }
+    }
+
+    // 키: 실행 파일 경로. 경로를 못 얻으면 이름을 쓴다. 같은 이름이라도 경로가 다르면 다른 프로그램이다.
+    // 경로는 프로세스(PID와 생성 시각)마다 한 번만 조회하고 캐시한다.
+    private string KeyOf(ProcessUsage p)
+    {
+        if (!_paths.TryGetValue(p.Key, out var path))
+        {
+            path = ProcessInfoCache.PathOf(p.Pid);
+            _paths[p.Key] = path;
+        }
+
+        return path.Length > 0 ? path : p.Name;
+    }
+
+    private void PruneKeys(IReadOnlyList<ProcessUsage> processes)
+    {
+        var alive = processes.Select(p => p.Key).ToHashSet();
+        foreach (var key in _paths.Keys.Where(k => !alive.Contains(k)).ToList())
+        {
+            _paths.Remove(key);
         }
     }
 

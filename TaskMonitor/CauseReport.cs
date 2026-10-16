@@ -70,6 +70,20 @@ internal static class CauseReport
         }
 
         sb.AppendLine();
+        sb.AppendLine("## 게임 세션");
+        sb.AppendLine();
+        var sessions = events.Where(e => e.Kind == ActivityLog.Game && e.Detail.StartsWith("끝", StringComparison.Ordinal)).ToList();
+        if (sessions.Count == 0)
+        {
+            sb.AppendLine("이 기간에 끝난 게임 세션이 없습니다. 세션은 전체 화면 창이 GPU 3D 사용 30% 이상을 10초 이상 쓴 경우로 본다.");
+        }
+
+        foreach (var s in sessions)
+        {
+            sb.AppendLine($"- {s.Time:HH:mm} **{s.Subject}** — {s.Detail}");
+        }
+
+        sb.AppendLine();
         sb.AppendLine("## 앱별 누적 사용량 (앱 기록, 측정 시작 이후 전체)");
         sb.AppendLine();
         if (apps.Count == 0)

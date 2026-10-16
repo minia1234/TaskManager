@@ -589,6 +589,57 @@ internal static class SelfTest
             Check("기록 CSV 내보내기", File.Exists(exported.ActivityPath) && csvHead.StartsWith("time,cpu_percent", StringComparison.Ordinal),
                 $"{Path.GetFileName(exported.ResourcePath)}: {csvHead}");
 
+            // 프로세스 CPU 급증: 한 프로세스가 전체 CPU 50% 이상을 20초 넘게 쓰면 한 번만 울린다.
+            var hogRules = new AlertRules();
+            var hogT0 = new DateTime(2026, 10, 16, 13, 0, 0);
+            var hog = new ProcessUsage(400, 1, "miner.exe", 70, 0, 0, 0, 1, 1, 1, 9000);
+            var hogSnap = new Snapshot(70, 0, 0, 8, Array.Empty<double>(), new[] { hog }, Array.Empty<ProcessGroup>(),
+                Array.Empty<ExitedProcess>(), 1, 1, 1, 70, 0);
+            var h0 = hogRules.Evaluate(hogT0, hogSnap, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks);
+            var h1 = hogRules.Evaluate(hogT0.AddSeconds(21), hogSnap, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks);
+            var h2 = hogRules.Evaluate(hogT0.AddSeconds(22), hogSnap, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks);
+            Check("프로세스 CPU 급증 경고(20초 지속, 한 번만)", h0.Count == 0 && h1.Count == 1 && h1[0].Subject == "프로세스 CPU 급증" && h2.Count == 0,
+                $"0초 {h0.Count}, 21초 {h1.Count}, 22초 {h2.Count}");
+
+            // 게임 세션: 전체 화면 + GPU 3D 30% 이상이 10초 이어지면 시작하고, 10초 끊기면 요약과 함께 끝난다.
+            var games = new GameSessionTracker();
+            var g0 = new DateTime(2026, 10, 16, 14, 0, 0);
+            var gameSnap = new Snapshot(60, 0, 0, 8, Array.Empty<double>(),
+                new[] { new ProcessUsage(500, 1, "game.exe", 40, 0, 0, 0, 1, 1, 1, 100) },
+                Array.Empty<ProcessGroup>(), Array.Empty<ExitedProcess>(), 1, 1, 1, 60, 0);
+            var gamePerf = PerfSnapshot.Empty with
+            {
+                Gpus = new[] { new GpuStats("GPU 0", 90, new Dictionary<string, double> { ["3D"] = 90 }, 0, 0, 0, 0, "0x0_0x1") },
+            };
+            var g1 = games.Update(g0, gameSnap, gamePerf, Array.Empty<GpuDetail>(), (500, true));
+            var g2 = games.Update(g0.AddSeconds(11), gameSnap, gamePerf, Array.Empty<GpuDetail>(), (500, true));
+            var g3 = games.Update(g0.AddSeconds(20), gameSnap, gamePerf, Array.Empty<GpuDetail>(), (0, false));
+            var g4 = games.Update(g0.AddSeconds(31), gameSnap, gamePerf, Array.Empty<GpuDetail>(), (0, false));
+            bool gameOk = g1.Count == 0 && g2.Count == 1 && g2[0].Kind == ActivityLog.Game && g2[0].Detail.StartsWith("시작", StringComparison.Ordinal)
+                && g3.Count == 0 && g4.Count == 1 && g4[0].Detail.StartsWith("끝", StringComparison.Ordinal) && g4[0].Detail.Contains("GPU 3D 평균 90%");
+            Check("게임 세션 시작·끝(전체 화면 + GPU 3D 30% 이상, 10초 확인)", gameOk,
+                $"시작 {g2.Count}, 끝 {g4.Count}" + (g4.Count > 0 ? $": {g4[0].Detail}" : ""));
+
+            // 기록 비교와 리포트의 게임 세션 절
+            string comparison = RecordComparison.Build(resources, activity,
+                new RecordComparison.Period(stamp.AddMinutes(-1), stamp.AddMinutes(1)),
+                new RecordComparison.Period(stamp.AddHours(-3), stamp.AddHours(-2)));
+            Check("기록 비교 표(평균·최고·차이, 경고 수)", comparison.Contains("CPU %") && comparison.Contains("기간 A") && comparison.Contains("경고: A"),
+                $"{comparison.Length}자");
+            string reportWithGames = CauseReport.Build(stamp.AddSeconds(5), resources, activity, Array.Empty<AppHistory.Row>());
+            Check("원인 분석 리포트에 게임 세션 절", reportWithGames.Contains("## 게임 세션"), "섹션 있음");
+
+            // 앱 기록: 키는 실행 파일 경로다. 이 프로세스(TaskMonitor.exe)의 행이 경로와 함께 나와야 한다.
+            var pathHistory = new AppHistory();
+            var selfUsage = new ProcessUsage(Environment.ProcessId, 1, "TaskMonitor.exe", 1, 0, 0, 0, 1, 1, 1, 1);
+            pathHistory.Update(new[] { selfUsage }, 8);
+            Thread.Sleep(300);
+            pathHistory.Update(new[] { selfUsage }, 8);
+            // 실제 기록 파일에는 옛 방식(이름 키) 행이 남아 있을 수 있어서, 경로가 붙은 행을 찾는다.
+            var selfRow = pathHistory.Snapshot().FirstOrDefault(r => r.Path.EndsWith("TaskMonitor.exe", StringComparison.OrdinalIgnoreCase));
+            Check("앱 기록: 키는 실행 파일 경로(경로 열 포함)", selfRow is not null,
+                selfRow is null ? "경로가 붙은 행 없음" : selfRow.Path);
+
             var analysisSnap = sampler.Sample();
             string analysis = ProcessAnalysisText.Build(Environment.ProcessId, analysisSnap, null, activity);
             Check("프로세스 분석 창 내용(자기 자신)", analysis.Contains("TaskMonitor") && analysis.Contains("[네트워크 연결]"),

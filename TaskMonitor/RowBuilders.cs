@@ -64,6 +64,7 @@ internal static class RowBuilders
         new("disk", "I/O 전송량", 130, Right: true),
         new("net", "네트워크", 90, Right: true),
         new("since", "측정 시작", 140),
+        new("path", "경로", 360),
     };
 
     public static readonly ColumnDef[] ServiceColumns =
@@ -245,6 +246,7 @@ internal static class RowBuilders
     {
         ActivityLog.Start => "시작",
         ActivityLog.Exit => "종료",
+        ActivityLog.Game => "게임",
         _ => "경고",
     };
 
@@ -265,16 +267,19 @@ internal static class RowBuilders
         var rows = new List<Row>(apps.Count);
         foreach (var app in apps)
         {
-            var row = new Row { Key = app.Name };
+            // 같은 파일 이름이라도 경로가 다르면 다른 행이다. 경로가 없는 옛 기록은 이름으로 구분한다.
+            var row = new Row { Key = app.Path.Length > 0 ? app.Path : "name:" + app.Name };
             row.Cells["name"] = app.Name;
             row.Cells["cpu"] = TimeSpan.FromSeconds(app.CpuSeconds).ToString(@"h\:mm\:ss");
             row.Cells["disk"] = DiskHealth.FormatBytes((long)app.IoBytes);
             row.Cells["net"] = "-";
             row.Cells["since"] = app.Since.ToString("yyyy-MM-dd HH:mm");
+            row.Cells["path"] = app.Path;
             row.Sort["name"] = app.Name;
             row.Sort["cpu"] = app.CpuSeconds;
             row.Sort["disk"] = app.IoBytes;
             row.Sort["since"] = app.Since;
+            row.Sort["path"] = app.Path;
             rows.Add(row);
         }
 
