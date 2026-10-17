@@ -27,6 +27,8 @@ internal static class RowBuilders
         new("threads", "스레드", 70, Right: true),
         new("handles", "핸들", 70, Right: true),
         new("conn", "연결", 60, Right: true),
+        new("net", "네트워크", 110, Right: true),
+        new("fps", "FPS", 60, Right: true),
         new("user", "사용자", 170),
         new("session", "세션", 60, Right: true),
         new("arch", "아키텍처", 80),
@@ -125,6 +127,14 @@ internal static class RowBuilders
                 double groupGpu = members.Sum(m => gpu.GetValueOrDefault(m.Pid));
                 group.Cells["gpu"] = FormatPercent(groupGpu);
                 group.Sort["gpu"] = groupGpu;
+                // 묶음 네트워크는 구성원의 합, FPS는 가장 높은 구성원 값(같은 프로그램의 여러 창이 각자 프레젠트하므로 합은 의미가 없다).
+                double groupNet = members.Sum(m => EtwLatest.Rates.TryGetValue(m.Pid, out var r) ? r.SentBytesPerSec + r.ReceivedBytesPerSec : 0);
+                bool anyNet = members.Any(m => EtwLatest.Rates.ContainsKey(m.Pid));
+                group.Cells["net"] = anyNet ? FormatRate(groupNet) : "-";
+                group.Sort["net"] = groupNet;
+                double groupFps = members.Max(m => EtwLatest.Frames.TryGetValue(m.Pid, out var f) ? f.Fps : 0);
+                group.Cells["fps"] = groupFps > 0 ? groupFps.ToString("F0") : "-";
+                group.Sort["fps"] = groupFps;
                 group.Cells["threads"] = g.Threads.ToString();
                 group.Sort["threads"] = g.Threads;
                 group.Cells["private"] = FormatMemory(g.PrivateBytes);
@@ -370,6 +380,30 @@ internal static class RowBuilders
         int connections = NetTable.Latest.TryGetValue(p.Pid, out var conns) ? conns.Count : 0;
         row.Cells["conn"] = connections.ToString();
         row.Sort["conn"] = connections;
+        // 네트워크: 보내기와 받기 속도의 합(ETW). 측정이 없으면 "-".
+        if (EtwLatest.Rates.TryGetValue(p.Pid, out var rate))
+        {
+            double bytesPerSec = rate.SentBytesPerSec + rate.ReceivedBytesPerSec;
+            row.Cells["net"] = FormatRate(bytesPerSec);
+            row.Sort["net"] = bytesPerSec;
+        }
+        else
+        {
+            row.Cells["net"] = "-";
+            row.Sort["net"] = 0.0;
+        }
+
+        // FPS: DXGI 프레젠트 수(최근 1초). 프레젠트가 없으면 "-".
+        if (EtwLatest.Frames.TryGetValue(p.Pid, out var frame))
+        {
+            row.Cells["fps"] = frame.Fps.ToString("F0");
+            row.Sort["fps"] = frame.Fps;
+        }
+        else
+        {
+            row.Cells["fps"] = "-";
+            row.Sort["fps"] = 0.0;
+        }
         row.Cells["user"] = detail.User;
         row.Sort["user"] = detail.User;
         row.Cells["session"] = p.SessionId.ToString();

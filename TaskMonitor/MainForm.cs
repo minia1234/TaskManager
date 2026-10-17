@@ -722,7 +722,9 @@ internal sealed class MainForm : Form
             string status = Strings.Fmt("마지막 갱신 {0}   |   프로세스 {1}개   |   기록 파일: {2}", DateTime.Now.ToString("HH:mm:ss"), snap.ProcessCount, SpikeLog.FilePath);
             if (_worker?.LastAlert is { } alert)
             {
-                status += $"   |   {Strings.Localize("경고")}: {alert}";
+                // 상태 바는 한 줄이라 긴 경고는 자른다(전체 내용은 이벤트 페이지에 있다).
+                string shown = alert.Length > 60 ? alert[..60] + "…" : alert;
+                status += $"   |   {Strings.Localize("경고")}: {shown}";
             }
 
             _status.Text = status;

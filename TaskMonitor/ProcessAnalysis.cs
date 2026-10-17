@@ -36,9 +36,28 @@ internal static class ProcessAnalysisText
         double gpu = perf?.GpuByPid.GetValueOrDefault(pid) ?? 0;
         long vram = perf is null ? 0 : perf.GpuVramByLuid.Values.SelectMany(v => v).Where(m => m.Pid == pid).Sum(m => m.Bytes);
         sb.AppendLine($"GPU         {gpu:F1}%   전용 VRAM {FormatBytes(vram)}");
+        sb.AppendLine(EtwLatest.Frames.TryGetValue(pid, out var frame)
+            ? $"FPS         {frame.Fps:F0}   프레임 간격 {frame.FrameMsAvg:F1} ms   1% 하위 {frame.OnePercentLowFps:F0} FPS"
+            : $"FPS         측정 없음 (이 프로세스의 프레젠트가 최근 2초 없음, ETW 상태: {EtwLatest.Status})");
         sb.AppendLine();
 
-        sb.AppendLine("[네트워크 연결] (보낸·받은 바이트는 제공하지 않음)");
+        sb.AppendLine("[네트워크] (ETW: TCP·UDP 보낸·받은 바이트, 관리자 권한 없이 읽음)");
+        if (EtwLatest.Totals.TryGetValue(pid, out var totals))
+        {
+            sb.AppendLine($"누적        보냄 {FormatBytes(totals.SentBytes)}   받음 {FormatBytes(totals.ReceivedBytes)}");
+        }
+        else
+        {
+            sb.AppendLine($"누적        측정 없음 (ETW 상태: {EtwLatest.Status})");
+        }
+
+        if (EtwLatest.Rates.TryGetValue(pid, out var rate))
+        {
+            sb.AppendLine($"현재 속도   보냄 {DiskHealth.FormatBytes((long)rate.SentBytesPerSec)}/s   받음 {DiskHealth.FormatBytes((long)rate.ReceivedBytesPerSec)}/s");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("[네트워크 연결]");
         var connections = NetTable.Latest.TryGetValue(pid, out var list) ? list : Array.Empty<NetConnection>();
         if (connections.Count == 0)
         {

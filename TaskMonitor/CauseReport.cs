@@ -111,8 +111,8 @@ internal static class CauseReport
         sb.AppendLine();
         sb.AppendLine("## 측정하지 못하는 것");
         sb.AppendLine();
-        sb.AppendLine("- 게임 프레임 속도와 프레임 시간: PresentMon 같은 ETW 기반 도구가 필요하다.");
-        sb.AppendLine("- 프로세스별 네트워크 바이트: 연결 목록과 개수만 기록한다(바이트는 ETW 또는 연결 통계가 필요).");
+        sb.AppendLine("- 프레임 속도: 프레젠트(DXGI)를 보내는 프로그램만 잰다. 프레젠트를 쓰지 않는 프로그램은 FPS가 없다.");
+        sb.AppendLine("- 네트워크 바이트: TCP·UDP 보내기와 받기를 프로세스별로 잰다(ETW, 관리자 권한 없음). 연결별 세부 통계는 제공하지 않는다.");
         sb.AppendLine("- CPU 온도와 메인보드·팬 센서: 전용 드라이버가 필요하다. GPU와 디스크 온도만 기록한다.");
         sb.AppendLine("- 샘플 주기(기본 1초) 사이에 시작하고 끝난 짧은 프로세스는 기록되지 않는다.");
         return sb.ToString();

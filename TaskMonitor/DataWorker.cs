@@ -32,6 +32,7 @@ internal sealed class DataWorker : IDisposable
     private readonly ProcessEventTracker _tracker = new();
     private readonly AlertRules _alerts = new();
     private readonly GameSessionTracker _games = new();
+    private readonly EtwMonitor _etw = new();
     private volatile bool _alertsOnly;
     private DateTime _lastResourceWrite = DateTime.MinValue;
     private int _activityShown = -1;
@@ -65,7 +66,11 @@ internal sealed class DataWorker : IDisposable
         _thread = new Thread(Run) { IsBackground = true, Name = "TaskMonitor data" };
     }
 
-    public void Start() => _thread.Start();
+    public void Start()
+    {
+        _etw.Start();
+        _thread.Start();
+    }
 
     // 멈춤 감시용: 작업 스레드가 지금 어느 단계에 있고, 그 단계에 들어간 지 몇 ms인지
     public string CurrentStage => _stage;
@@ -235,7 +240,10 @@ internal sealed class DataWorker : IDisposable
 
         var events = _tracker.Update(snap.Processes, now);
         var alerts = _alerts.Evaluate(now, snap, perf, gpus, DiskHealthMonitor.Latest);
-        var games = _games.Update(now, snap, perf, gpus, Win32.ForegroundWindowState());
+        var frames = _etw.Frames(now);
+        var rates = _etw.Rates(now);
+        EtwLatest.Publish(frames, rates, _etw.Totals(), _etw.Status);
+        var games = _games.Update(now, snap, perf, gpus, frames, Win32.ForegroundWindowState());
         var recorded = new List<ActivityEvent>(events.Count + alerts.Count + games.Count);
         recorded.AddRange(events);
         recorded.AddRange(alerts);
@@ -371,6 +379,7 @@ internal sealed class DataWorker : IDisposable
         }
 
         _history.Save();
+        _etw.Dispose();
         _wake.Dispose();
     }
 }

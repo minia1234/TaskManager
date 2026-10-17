@@ -21,6 +21,9 @@ internal sealed class GameSessionTracker
         public int? TempMax;
         public long VramMax;
         public int ThrottledSamples;
+        public int FrameSamples;
+        public double FpsSum;
+        public double LowFpsSum;
     }
 
     private Session? _current;
@@ -29,8 +32,9 @@ internal sealed class GameSessionTracker
 
     // 샘플링 때마다 호출한다. 세션이 시작되거나 끝날 때만 활동 기록 항목을 돌려준다.
     // foreground: 앞 창의 프로세스 ID와 전체 화면 여부(Win32.ForegroundWindowState). 자체 검증에서 직접 넣을 수 있게 밖에서 받는다.
+    // frames: 프로세스별 프레임 통계(EtwMonitor). 프레젠트를 못 읽은 프로세스는 FPS를 적지 않는다.
     public IReadOnlyList<ActivityEvent> Update(DateTime now, Snapshot snapshot, PerfSnapshot perf, IReadOnlyList<GpuDetail> gpus,
-        (int ProcessId, bool Fullscreen) foreground)
+        IReadOnlyDictionary<int, FrameStats> frames, (int ProcessId, bool Fullscreen) foreground)
     {
         var events = new List<ActivityEvent>();
         var (pid, fullscreen) = foreground;
@@ -59,7 +63,7 @@ internal sealed class GameSessionTracker
         }
 
         var session = _current;
-        Accumulate(session, snapshot, gpu3d, gpus);
+        Accumulate(session, snapshot, gpu3d, gpus, frames.GetValueOrDefault(session.Pid));
         if (candidate && pid == session.Pid)
         {
             _leftSince = null;
@@ -78,9 +82,16 @@ internal sealed class GameSessionTracker
         return events;
     }
 
-    private static void Accumulate(Session s, Snapshot snapshot, double gpu3d, IReadOnlyList<GpuDetail> gpus)
+    private static void Accumulate(Session s, Snapshot snapshot, double gpu3d, IReadOnlyList<GpuDetail> gpus, FrameStats? frame)
     {
         s.Samples++;
+        if (frame is not null)
+        {
+            s.FrameSamples++;
+            s.FpsSum += frame.Fps;
+            s.LowFpsSum += frame.OnePercentLowFps;
+        }
+
         s.CpuSum += snapshot.TotalCpuPercent;
         s.CpuMax = Math.Max(s.CpuMax, snapshot.TotalCpuPercent);
         s.GpuSum += gpu3d;
@@ -101,7 +112,10 @@ internal sealed class GameSessionTracker
     {
         double n = Math.Max(1, s.Samples);
         string temp = s.TempMax is { } t ? $"{t}°C" : "-";
-        return $"끝 (PID {s.Pid}) {FormatSpan(end - s.Start)}, CPU 평균 {s.CpuSum / n:F0}%·최고 {s.CpuMax:F0}%, "
+        string fps = s.FrameSamples > 0
+            ? $"FPS 평균 {s.FpsSum / s.FrameSamples:F0}·1% 하위 {s.LowFpsSum / s.FrameSamples:F0}, "
+            : "FPS 측정 없음, ";
+        return $"끝 (PID {s.Pid}) {FormatSpan(end - s.Start)}, {fps}CPU 평균 {s.CpuSum / n:F0}%·최고 {s.CpuMax:F0}%, "
             + $"GPU 3D 평균 {s.GpuSum / n:F0}%·최고 {s.GpuMax:F0}%, GPU 온도 최고 {temp}, "
             + $"VRAM 최고 {s.VramMax / 1073741824.0:F1}GB, 클럭 제한 {s.ThrottledSamples}회(샘플 {s.Samples}개)";
     }

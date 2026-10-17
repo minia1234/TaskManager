@@ -611,10 +611,10 @@ internal static class SelfTest
             {
                 Gpus = new[] { new GpuStats("GPU 0", 90, new Dictionary<string, double> { ["3D"] = 90 }, 0, 0, 0, 0, "0x0_0x1") },
             };
-            var g1 = games.Update(g0, gameSnap, gamePerf, Array.Empty<GpuDetail>(), (500, true));
-            var g2 = games.Update(g0.AddSeconds(11), gameSnap, gamePerf, Array.Empty<GpuDetail>(), (500, true));
-            var g3 = games.Update(g0.AddSeconds(20), gameSnap, gamePerf, Array.Empty<GpuDetail>(), (0, false));
-            var g4 = games.Update(g0.AddSeconds(31), gameSnap, gamePerf, Array.Empty<GpuDetail>(), (0, false));
+            var g1 = games.Update(g0, gameSnap, gamePerf, Array.Empty<GpuDetail>(), new Dictionary<int, FrameStats>(), (500, true));
+            var g2 = games.Update(g0.AddSeconds(11), gameSnap, gamePerf, Array.Empty<GpuDetail>(), new Dictionary<int, FrameStats>(), (500, true));
+            var g3 = games.Update(g0.AddSeconds(20), gameSnap, gamePerf, Array.Empty<GpuDetail>(), new Dictionary<int, FrameStats>(), (0, false));
+            var g4 = games.Update(g0.AddSeconds(31), gameSnap, gamePerf, Array.Empty<GpuDetail>(), new Dictionary<int, FrameStats>(), (0, false));
             bool gameOk = g1.Count == 0 && g2.Count == 1 && g2[0].Kind == ActivityLog.Game && g2[0].Detail.StartsWith("시작", StringComparison.Ordinal)
                 && g3.Count == 0 && g4.Count == 1 && g4[0].Detail.StartsWith("끝", StringComparison.Ordinal) && g4[0].Detail.Contains("GPU 3D 평균 90%");
             Check("게임 세션 시작·끝(전체 화면 + GPU 3D 30% 이상, 10초 확인)", gameOk,
@@ -639,6 +639,91 @@ internal static class SelfTest
             var selfRow = pathHistory.Snapshot().FirstOrDefault(r => r.Path.EndsWith("TaskMonitor.exe", StringComparison.OrdinalIgnoreCase));
             Check("앱 기록: 키는 실행 파일 경로(경로 열 포함)", selfRow is not null,
                 selfRow is null ? "경로가 붙은 행 없음" : selfRow.Path);
+
+            // ETW 교정(관리자 권한 없이): 루프백 TCP 보내기·받기 각 300KB, UDP 32KB 데이터그램 세 개.
+            // 이 프로세스의 누적 바이트가 기대값과 3% 안에서 맞아야 한다(TCP 600KB + UDP 96KB).
+            using (var etw = new EtwMonitor())
+            {
+                etw.Start();
+                Thread.Sleep(500);
+                const int etwChunk = 100 * 1024;
+                var etwListener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 9131);
+                etwListener.Start();
+                var etwServer = new Thread(() =>
+                {
+                    using var peer = etwListener.AcceptTcpClient();
+                    var etwBuf = new byte[65536];
+                    long etwGot = 0;
+                    var etwServerStream = peer.GetStream();
+                    int etwR;
+                    while (etwGot < 3L * etwChunk && (etwR = etwServerStream.Read(etwBuf, 0, etwBuf.Length)) > 0)
+                    {
+                        etwGot += etwR;
+                    }
+
+                    etwServerStream.Write(new byte[3 * etwChunk], 0, 3 * etwChunk);
+                }) { IsBackground = true };
+                etwServer.Start();
+                using (var etwClient = new System.Net.Sockets.TcpClient("127.0.0.1", 9131))
+                {
+                    var etwClientStream = etwClient.GetStream();
+                    var etwPayload = new byte[etwChunk];
+                    for (int etwI = 0; etwI < 3; etwI++)
+                    {
+                        etwClientStream.Write(etwPayload, 0, etwPayload.Length);
+                    }
+
+                    long etwBack = 0;
+                    var etwInbox = new byte[65536];
+                    int etwM;
+                    while (etwBack < 3L * etwChunk && (etwM = etwClientStream.Read(etwInbox, 0, etwInbox.Length)) > 0)
+                    {
+                        etwBack += etwM;
+                    }
+                }
+
+                etwServer.Join(10000);
+                etwListener.Stop();
+
+                using (var etwReceiver = new System.Net.Sockets.UdpClient(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 9132)))
+                using (var etwSender = new System.Net.Sockets.UdpClient())
+                {
+                    // 1200바이트 데이터그램(조각나지 않는 크기) 스무 개: 32KB처럼 조각나면 받는 쪽에서 버려질 수 있다.
+                    etwReceiver.Client.ReceiveTimeout = 3000;
+                    var etwDatagram = new byte[1200];
+                    for (int etwI = 0; etwI < 20; etwI++)
+                    {
+                        etwSender.Send(etwDatagram, etwDatagram.Length, new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 9132));
+                    }
+
+                    var etwRemote = new System.Net.IPEndPoint(System.Net.IPAddress.Any, 0);
+                    for (int etwI = 0; etwI < 20; etwI++)
+                    {
+                        try
+                        {
+                            etwReceiver.Receive(ref etwRemote);
+                        }
+                        catch (System.Net.Sockets.SocketException)
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                Thread.Sleep(3000);
+                var etwTotals = etw.Totals().GetValueOrDefault(Environment.ProcessId) ?? new NetTotals(0, 0);
+                const long etwExpected = 3L * etwChunk * 2 + 20L * 1200;
+                // TCP은 정확히 맞아야 하고, UDP 데이터그램 한 개(1200바이트)가 빠져도 실패하도록 허용 오차를 0.5%로 둔다.
+                bool etwSentOk = Math.Abs(etwTotals.SentBytes - etwExpected) <= etwExpected * 0.005;
+                bool etwRecvOk = Math.Abs(etwTotals.ReceivedBytes - etwExpected) <= etwExpected * 0.005;
+                Check("ETW 네트워크 교정(관리자 없이 TCP·UDP 바이트가 기대값과 맞음)", etw.Status == "실행 중" && etwSentOk && etwRecvOk,
+                    $"상태 {etw.Status}, 보냄 {etwTotals.SentBytes} (기대 {etwExpected}), 받음 {etwTotals.ReceivedBytes} (기대 {etwExpected})");
+
+                // 프레임 측정: 이 PC에서 프레젠트(DXGI)를 보내는 프로세스가 있는지만 본다(정보용: 없는 PC에서는 0개가 맞다).
+                var frameNow = etw.Frames(DateTime.Now);
+                Check("프레임 측정(DXGI 프레젠트 수신, 정보용)", true,
+                    $"프레젠트 중인 프로세스 {frameNow.Count}개" + (frameNow.Count > 0 ? $", 최고 {frameNow.Values.Max(f => f.Fps):F0} FPS" : ""));
+            }
 
             var analysisSnap = sampler.Sample();
             string analysis = ProcessAnalysisText.Build(Environment.ProcessId, analysisSnap, null, activity);
