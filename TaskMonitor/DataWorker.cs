@@ -35,6 +35,7 @@ internal sealed class DataWorker : IDisposable
     private readonly EtwMonitor _etw = new();
     private volatile bool _alertsOnly;
     private double? _cpuTemp;
+    private volatile IReadOnlyList<double> _fanRpm = Array.Empty<double>();
     private DateTime _lastResourceWrite = DateTime.MinValue;
     private int _activityShown = -1;
 
@@ -128,6 +129,9 @@ internal sealed class DataWorker : IDisposable
 
     // CPU 온도(HWiNFO 공유 메모리). HWiNFO가 꺼져 있으면 null.
     public double? CpuTemperatureC => _cpuTemp;
+
+    // 팬 회전수(RPM, 최대 세 개). HWiNFO가 꺼져 있으면 비어 있다.
+    public IReadOnlyList<double> FanRpm => _fanRpm;
 
     public ResourceLog Resources => _resources;
 
@@ -243,8 +247,11 @@ internal sealed class DataWorker : IDisposable
         var gpus = GpuDetailMonitor.Latest;
 
         var events = _tracker.Update(snap.Processes, now);
-        var cpuTemp = HwinfoSensors.CpuTemperatureC(HwinfoSensors.Read());
+        var sensors = HwinfoSensors.Read();
+        var cpuTemp = HwinfoSensors.CpuTemperatureC(sensors);
         _cpuTemp = cpuTemp;
+        _fanRpm = sensors.Where(r => r.Kind == HwinfoSensors.KindFan && r.Unit.Contains("RPM", StringComparison.OrdinalIgnoreCase))
+            .Select(r => r.Value).Take(3).ToList();
         var alerts = _alerts.Evaluate(now, snap, perf, gpus, DiskHealthMonitor.Latest, cpuTemp);
         var frames = _etw.Frames(now);
         var rates = _etw.Rates(now);

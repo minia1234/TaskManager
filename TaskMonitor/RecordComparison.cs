@@ -37,18 +37,17 @@ internal static class RecordComparison
         return sb.ToString();
     }
 
+    // 각 기간은 따로 보인다(한쪽에만 표본이 있어도 다른 쪽 값은 나온다). 차이는 양쪽에 표본이 있을 때만 쓴다.
     private static void Row(StringBuilder sb, string name, IEnumerable<double> a, IEnumerable<double> b)
     {
         var la = a.ToList();
         var lb = b.ToList();
-        if (la.Count == 0 || lb.Count == 0)
-        {
-            sb.AppendLine($"{name,-12}{"-",10}{"-",10}{"-",12}{"-",10}{"-",10}");
-            return;
-        }
-
-        double avgA = la.Average(), avgB = lb.Average();
-        sb.AppendLine($"{name,-12}{avgA,10:F1}{avgB,10:F1}{avgB - avgA,12:+0.0;-0.0;0.0}{la.Max(),10:F1}{lb.Max(),10:F1}");
+        string avgA = la.Count > 0 ? la.Average().ToString("F1") : "-";
+        string avgB = lb.Count > 0 ? lb.Average().ToString("F1") : "-";
+        string diff = la.Count > 0 && lb.Count > 0 ? (lb.Average() - la.Average()).ToString("+0.0;-0.0;0.0") : "-";
+        string maxA = la.Count > 0 ? la.Max().ToString("F1") : "-";
+        string maxB = lb.Count > 0 ? lb.Max().ToString("F1") : "-";
+        sb.AppendLine($"{name,-12}{avgA,10}{avgB,10}{diff,12}{maxA,10}{maxB,10}");
     }
 
     private static int Count(IReadOnlyList<ActivityEvent> events, string kind) => events.Count(e => e.Kind == kind);
@@ -103,6 +102,21 @@ internal sealed class RecordComparisonForm : Form
         Controls.Add(_result);
         Controls.Add(top);
         _compare.Click += async (_, _) => await CompareAsync();
+        // Enter로 비교를 실행한다(키보드만으로 쓸 수 있게).
+        AcceptButton = _compare;
+        foreach (var picker in new[] { _aFrom, _aTo, _bFrom, _bTo })
+        {
+            picker.BackColor = Theme.Input;
+            picker.ForeColor = Theme.Fg;
+        }
+
+        // 단추는 시스템 색을 쓰면 어두운 테마에서 글자가 안 보이므로 테마 색을 직접 준다.
+        _compare.FlatStyle = FlatStyle.Flat;
+        _compare.BackColor = Theme.Input;
+        _compare.ForeColor = Theme.Fg;
+        _compare.FlatAppearance.BorderColor = Theme.Accent;
+
+        Theme.ApplyTextColors(this);
     }
 
     private static DateTimePicker Picker(DateTime value) => new()

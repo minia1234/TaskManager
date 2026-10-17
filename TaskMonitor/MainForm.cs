@@ -723,6 +723,10 @@ internal sealed class MainForm : Form
             if (_worker?.CpuTemperatureC is { } cpuTemp)
             {
                 status += $"   |   CPU {cpuTemp:F0}°C";
+                if (_worker?.FanRpm is { Count: > 0 } fans)
+                {
+                    status += $"   팬 {string.Join(" / ", fans.Select(rpm => rpm.ToString("F0")))} RPM";
+                }
             }
 
             if (_worker?.LastAlert is { } alert)
