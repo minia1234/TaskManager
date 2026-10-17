@@ -39,6 +39,14 @@ internal sealed class GridPage : UserControl
     private bool _sortDesc;
     private string? _selectedKey;
     private int _contentHash;
+    private readonly Label _empty = new() { AutoSize = true, Visible = false };
+
+    // 행이 하나도 없을 때 표 위에 보이는 안내 문구. 비워 두면 아무것도 보이지 않는다.
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string EmptyText { get; set; } = "";
+
+    // 자체 검증용: 안내 문구가 지금 보이는지
+    internal bool EmptyTextVisible => _empty.Visible;
 
     public GridPage(IReadOnlyList<ColumnDef> all, IEnumerable<string> visible)
     {
@@ -57,6 +65,8 @@ internal sealed class GridPage : UserControl
 
         Controls.Add(_grid);
         Controls.Add(_toolbar);
+        Controls.Add(_empty);
+        _empty.BringToFront();
         SetColumns(visible);
     }
 
@@ -104,6 +114,21 @@ internal sealed class GridPage : UserControl
     {
         _rows = rows;
         Rebuild();
+        _empty.Text = EmptyText;
+        _empty.Visible = _rows.Count == 0 && EmptyText.Length > 0;
+        PositionEmptyText();
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        PositionEmptyText();
+    }
+
+    // 안내 문구는 머리글 바로 아래 왼쪽에 둔다.
+    private void PositionEmptyText()
+    {
+        _empty.Location = new Point(16, _toolbar.Bottom + 52);
     }
 
     public void SetFilter(string text)

@@ -725,6 +725,14 @@ internal static class SelfTest
                     $"프레젠트 중인 프로세스 {frameNow.Count}개" + (frameNow.Count > 0 ? $", 최고 {frameNow.Values.Max(f => f.Fps):F0} FPS" : ""));
             }
 
+            // 이벤트 페이지 안내 문구: 행이 없으면 보이고, 행이 생기면 가려진다.
+            var emptyPage = new GridPage(RowBuilders.ActivityColumns, RowBuilders.ActivityColumns.Select(c => c.Key)) { EmptyText = "안내" };
+            emptyPage.SetRows(new List<Row>());
+            bool emptyShown = emptyPage.EmptyTextVisible;
+            emptyPage.SetRows(RowBuilders.Activity(new[] { new ActivityEvent(DateTime.Now, ActivityLog.Alert, "시험", "내용", 0) }));
+            bool emptyHidden = !emptyPage.EmptyTextVisible;
+            Check("이벤트 안내 문구(행이 없을 때만 보임)", emptyShown && emptyHidden, $"빈 목록 {emptyShown}, 행 있음 {emptyHidden}");
+
             // HWiNFO 공유 메모리 해석: 합성 메모리(같은 구조)를 만들어 CPU 온도와 팬 칸을 읽는지 확인한다.
             // 실제 HWiNFO가 쓰는 메모리와의 일치는 HWiNFO를 켠 상태에서만 확인할 수 있다(정보용으로 표시).
             string sensorName = "Local\\TaskMonitorSensorTest-" + Guid.NewGuid().ToString("N");

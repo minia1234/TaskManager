@@ -120,6 +120,7 @@ internal sealed class MainForm : Form
 
 
         _pages = new Control[] { _processes, _performance, _historyPage, _startup, _users, _details, _services, _eventsPage };
+        _eventsPage.EmptyText = "아직 기록이 없습니다. 프로세스 시작·종료, 경고, 게임 세션이 여기에 쌓입니다.";
         foreach (var page in _pages)
         {
             _content.Controls.Add(page);
