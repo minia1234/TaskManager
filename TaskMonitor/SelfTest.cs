@@ -725,6 +725,37 @@ internal static class SelfTest
                     $"프레젠트 중인 프로세스 {frameNow.Count}개" + (frameNow.Count > 0 ? $", 최고 {frameNow.Values.Max(f => f.Fps):F0} FPS" : ""));
             }
 
+            // HWiNFO 공유 메모리 해석: 합성 메모리(같은 구조)를 만들어 CPU 온도와 팬 칸을 읽는지 확인한다.
+            // 실제 HWiNFO가 쓰는 메모리와의 일치는 HWiNFO를 켠 상태에서만 확인할 수 있다(정보용으로 표시).
+            string sensorName = "Local\\TaskMonitorSensorTest-" + Guid.NewGuid().ToString("N");
+            using (var sensorMap = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateNew(sensorName, 4096))
+            using (var sensorView = sensorMap.CreateViewAccessor(0, 4096))
+            {
+                const int readingSize = 316;
+                sensorView.Write(0, (uint)0x53695748);
+                sensorView.Write(32, (uint)64);            // 읽기 칸 시작
+                sensorView.Write(36, (uint)readingSize);    // 읽기 칸 크기
+                sensorView.Write(40, (uint)2);              // 읽기 칸 개수
+                void WriteReading(int index, int kind, string label, string unit, double value)
+                {
+                    long at = 64 + (long)index * readingSize;
+                    sensorView.Write(at, kind);
+                    var labelBytes = System.Text.Encoding.ASCII.GetBytes(label);
+                    sensorView.WriteArray(at + 12, labelBytes, 0, labelBytes.Length);
+                    var unitBytes = System.Text.Encoding.ASCII.GetBytes(unit);
+                    sensorView.WriteArray(at + 268, unitBytes, 0, unitBytes.Length);
+                    sensorView.Write(at + 284, value);
+                }
+
+                WriteReading(0, HwinfoSensors.KindTemperature, "CPU Package", "C", 67.5);
+                WriteReading(1, HwinfoSensors.KindFan, "CPU Fan", "RPM", 1200);
+                var sensors = HwinfoSensors.Read(sensorName);
+                double? cpuTempRead = HwinfoSensors.CpuTemperatureC(sensors);
+                bool fanOk = sensors.Any(r => r.Kind == HwinfoSensors.KindFan && r.Label == "CPU Fan" && r.Value == 1200);
+                Check("HWiNFO 공유 메모리 해석(CPU 온도·팬, 합성 메모리)", cpuTempRead == 67.5 && fanOk,
+                    $"CPU {cpuTempRead?.ToString("F1") ?? "-"}°C, 팬 칸 {(fanOk ? "있음" : "없음")}");
+            }
+
             var analysisSnap = sampler.Sample();
             string analysis = ProcessAnalysisText.Build(Environment.ProcessId, analysisSnap, null, activity);
             Check("프로세스 분석 창 내용(자기 자신)", analysis.Contains("TaskMonitor") && analysis.Contains("[네트워크 연결]"),

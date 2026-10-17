@@ -156,6 +156,7 @@ internal sealed class AlertRules
     private const double CpuPercentLimit = 90;
     private const double RamPercentLimit = 90;
     private const int GpuTempLimitC = 85;
+    private const int CpuTempLimitC = 95;
     private const int GpuJunctionLimitC = 100;
     private const int DiskTempLimitC = 70;
     private const int Hysteresis = 5;
@@ -169,9 +170,16 @@ internal sealed class AlertRules
     private DateTime? _cpuHighSince;
 
     public IReadOnlyList<ActivityEvent> Evaluate(
-        DateTime now, Snapshot snapshot, PerfSnapshot perf, IReadOnlyList<GpuDetail> gpus, IReadOnlyDictionary<int, DiskHealthInfo> disks)
+        DateTime now, Snapshot snapshot, PerfSnapshot perf, IReadOnlyList<GpuDetail> gpus, IReadOnlyDictionary<int, DiskHealthInfo> disks,
+        double? cpuTempC = null)
     {
         var alerts = new List<ActivityEvent>();
+
+        // CPU 온도: HWiNFO 공유 메모리로 읽을 수 있을 때만 본다(없으면 경고도 없다).
+        if (cpuTempC is { } cpuTemp)
+        {
+            Edge(alerts, now, "cpu-temp", cpuTemp, CpuTempLimitC, "CPU 과열", $"CPU {cpuTemp:F0}°C (기준 {CpuTempLimitC}°C)");
+        }
 
         // 프로세스 하나가 전체 CPU의 50% 이상을 20초 넘게 쓰면 한 번 경고한다. 그 프로세스가 내려가거나 끝나면 다시 울릴 수 있다.
         var hot = snapshot.Processes.Where(p => p.CpuPercent >= ProcessCpuLimit).ToList();

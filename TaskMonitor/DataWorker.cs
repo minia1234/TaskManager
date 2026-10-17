@@ -34,6 +34,7 @@ internal sealed class DataWorker : IDisposable
     private readonly GameSessionTracker _games = new();
     private readonly EtwMonitor _etw = new();
     private volatile bool _alertsOnly;
+    private double? _cpuTemp;
     private DateTime _lastResourceWrite = DateTime.MinValue;
     private int _activityShown = -1;
 
@@ -124,6 +125,9 @@ internal sealed class DataWorker : IDisposable
     }
 
     public ActivityLog Activity => _activity;
+
+    // CPU 온도(HWiNFO 공유 메모리). HWiNFO가 꺼져 있으면 null.
+    public double? CpuTemperatureC => _cpuTemp;
 
     public ResourceLog Resources => _resources;
 
@@ -239,7 +243,9 @@ internal sealed class DataWorker : IDisposable
         var gpus = GpuDetailMonitor.Latest;
 
         var events = _tracker.Update(snap.Processes, now);
-        var alerts = _alerts.Evaluate(now, snap, perf, gpus, DiskHealthMonitor.Latest);
+        var cpuTemp = HwinfoSensors.CpuTemperatureC(HwinfoSensors.Read());
+        _cpuTemp = cpuTemp;
+        var alerts = _alerts.Evaluate(now, snap, perf, gpus, DiskHealthMonitor.Latest, cpuTemp);
         var frames = _etw.Frames(now);
         var rates = _etw.Rates(now);
         EtwLatest.Publish(frames, rates, _etw.Totals(), _etw.Status);
