@@ -102,6 +102,7 @@ internal sealed class MainForm : Form
     private RegisteredWaitHandle? _activateWait;
     // 메뉴의 "종료"처럼 정말 끝낼 때 켠다. 꺼져 있으면 X 단추는 설정에 따라 트레이로 숨긴다.
     private bool _exiting;
+    private string? _lastNotifiedAlert;
 
     private int _currentPage = PageProcesses;
     private Snapshot? _last;
@@ -517,6 +518,12 @@ internal sealed class MainForm : Form
         _tray.Icon = AppIcon;
         _tray.Text = "TaskMonitor";
         _tray.DoubleClick += (_, _) => RestoreFromTray();
+        // 경고 알림을 누르면 이벤트 페이지를 연다.
+        _tray.BalloonTipClicked += (_, _) =>
+        {
+            RestoreFromTray();
+            ShowPage(PageEvents);
+        };
         var trayMenu = new ContextMenuStrip();
         trayMenu.Items.Add(Strings.Localize("열기"), null, (_, _) => RestoreFromTray());
         trayMenu.Items.Add(Strings.Localize("종료"), null, (_, _) => ExitApp());
@@ -810,6 +817,13 @@ internal sealed class MainForm : Form
                 // 상태 바는 한 줄이라 긴 경고는 자른다(전체 내용은 이벤트 페이지에 있다).
                 string shown = alert.Length > 60 ? alert[..60] + "…" : alert;
                 status += $"   |   {Strings.Localize("경고")}: {shown}";
+                // 트레이에 숨어 있을 때는 아무도 상태 바를 보지 않으므로 새 경고를 알림으로 띄운다(같은 경고는 한 번만).
+                if (alert != _lastNotifiedAlert && AppState.Background && _tray.Visible)
+                {
+                    _tray.ShowBalloonTip(10000, "TaskMonitor", alert, ToolTipIcon.Warning);
+                }
+
+                _lastNotifiedAlert = alert;
             }
 
             _status.Text = status;
