@@ -8,10 +8,12 @@ namespace TaskMonitor;
 // DataGridView는 다시 그릴 때 모든 칸의 상태를 계산해서 느렸기 때문에 이 컨트롤로 바꿨다.
 internal sealed class RowGrid : Control
 {
-    private const int RowHeight = 28;
-    private const int TextInset = 6;
-    private const int IconSize = 16;
-    private const int IconSlot = 22;
+    // 크기는 96 DPI 기준 값이고, 그리는 순간 이 창의 실제 DPI로 늘린다(글꼴은 pt라 DPI에 맞춰 커지므로 행도 같이 커져야 글자가 잘리지 않는다).
+    private int RowHeight => LogicalToDeviceUnits(28);
+    private int TextInset => LogicalToDeviceUnits(6);
+    private int IconSize => LogicalToDeviceUnits(16);
+    private int IconSlot => LogicalToDeviceUnits(22);
+    private int HeaderPx => LogicalToDeviceUnits(_headerHeight);
     private const int DefaultHeaderHeight = 32;
 
     private static Color GridLine => Theme.Grid;
@@ -45,6 +47,14 @@ internal sealed class RowGrid : Control
         _vbar.ValueChanged += (_, _) => Invalidate();
         _hbar.ValueChanged += (_, _) => Invalidate();
         Resize += (_, _) => UpdateScrollBars();
+    }
+
+    // 다른 배율의 모니터로 옮기면 크기를 다시 계산한다.
+    protected override void OnDpiChangedAfterParent(EventArgs e)
+    {
+        base.OnDpiChangedAfterParent(e);
+        UpdateScrollBars();
+        Invalidate();
     }
 
     public event EventHandler? SelectionChanged;
@@ -167,14 +177,14 @@ internal sealed class RowGrid : Control
         }
 
         _big[key] = (text, color);
-        Invalidate(new Rectangle(0, 0, Width, _headerHeight));
+        Invalidate(new Rectangle(0, 0, Width, HeaderPx));
     }
 
     private int ContentWidth => Width - (_vbar.Visible ? _vbar.Width : 0);
 
     private int ContentHeight => Height - (_hbar.Visible ? _hbar.Height : 0);
 
-    private int VisibleRowCount => Math.Max(1, (ContentHeight - _headerHeight) / RowHeight);
+    private int VisibleRowCount => Math.Max(1, (ContentHeight - HeaderPx) / RowHeight);
 
     private void EnsureVisible(int index)
     {
@@ -212,13 +222,13 @@ internal sealed class RowGrid : Control
         int sbh = SystemInformation.HorizontalScrollBarHeight;
 
         // 세로 스크롤바가 필요한지 먼저 보고, 가로 스크롤바가 생기면 높이가 줄어 한 번 더 확인한다.
-        bool vNeeded = _rows.Count > Math.Max(1, (Height - _headerHeight) / RowHeight);
+        bool vNeeded = _rows.Count > Math.Max(1, (Height - HeaderPx) / RowHeight);
         // 최소화나 트레이 시작처럼 창이 스크롤바보다 좁을 때도 폭이 음수가 되지 않게 한다(스크롤바 LargeChange가 음수면 예외).
         int cw = Math.Max(1, Width - (vNeeded ? sbw : 0));
         LayoutColumns(cw);
         bool hNeeded = _totalWidth > cw;
         int ch = Height - (hNeeded ? sbh : 0);
-        int visible = Math.Max(1, (ch - _headerHeight) / RowHeight);
+        int visible = Math.Max(1, (ch - HeaderPx) / RowHeight);
         bool vFinal = _rows.Count > visible;
         if (vFinal != vNeeded)
         {
@@ -257,11 +267,12 @@ internal sealed class RowGrid : Control
     {
         _x.Clear();
         _w.Clear();
-        int fixedTotal = _columns.Where(c => !c.Fill).Sum(c => c.Width);
+        int fixedTotal = _columns.Where(c => !c.Fill).Sum(c => LogicalToDeviceUnits(c.Width));
         int x = 0;
         foreach (var column in _columns)
         {
-            int width = column.Fill ? Math.Max(column.Width, contentWidth - fixedTotal) : column.Width;
+            int columnWidth = LogicalToDeviceUnits(column.Width);
+            int width = column.Fill ? Math.Max(columnWidth, contentWidth - fixedTotal) : columnWidth;
             _x.Add(x);
             _w.Add(width);
             x += width;
@@ -290,16 +301,16 @@ internal sealed class RowGrid : Control
                 continue;
             }
 
-            DrawHeader(g, c, new Rectangle(x, 0, _w[c], _headerHeight));
+            DrawHeader(g, c, new Rectangle(x, 0, _w[c], HeaderPx));
         }
 
-        g.DrawLine(LinePen, 0, _headerHeight - 1, cw, _headerHeight - 1);
+        g.DrawLine(LinePen, 0, HeaderPx - 1, cw, HeaderPx - 1);
 
         // 화면에 걸친 행만 그린다.
-        int last = Math.Min(_rows.Count, first + Math.Max(1, (ch - _headerHeight) / RowHeight) + 1);
+        int last = Math.Min(_rows.Count, first + Math.Max(1, (ch - HeaderPx) / RowHeight) + 1);
         for (int r = first; r < last; r++)
         {
-            DrawRow(g, r, _headerHeight + (r - first) * RowHeight, xOffset, cw);
+            DrawRow(g, r, HeaderPx + (r - first) * RowHeight, xOffset, cw);
         }
     }
 
@@ -311,14 +322,14 @@ internal sealed class RowGrid : Control
 
         if (column.Big && _big.TryGetValue(column.Key, out var big))
         {
-            TextRenderer.DrawText(g, big.Text, BigFont, new Rectangle(rect.X + TextInset, rect.Y + 4, rect.Width - TextInset * 2, 36),
+            TextRenderer.DrawText(g, big.Text, BigFont, new Rectangle(rect.X + TextInset, rect.Y + LogicalToDeviceUnits(4), rect.Width - TextInset * 2, LogicalToDeviceUnits(36)),
                 big.Color, flags | TextFormatFlags.Top);
         }
 
         string label = Strings.Localize(column.Header) + (column.Key == _sortKey ? (_sortDesc ? " ▼" : " ▲") : "");
         int shift = c == 0 ? IconSlot : 0;
         var labelRect = column.Big
-            ? new Rectangle(rect.X + TextInset, rect.Bottom - 26, rect.Width - TextInset * 2, 22)
+            ? new Rectangle(rect.X + TextInset, rect.Bottom - LogicalToDeviceUnits(26), rect.Width - TextInset * 2, LogicalToDeviceUnits(22))
             : new Rectangle(rect.X + TextInset + shift, rect.Y, rect.Width - TextInset * 2 - shift, rect.Height);
         var labelFlags = flags | (column.Big ? TextFormatFlags.Bottom : TextFormatFlags.VerticalCenter);
         TextRenderer.DrawText(g, label, BodyFont, labelRect, Theme.Fg, labelFlags);
@@ -399,7 +410,7 @@ internal sealed class RowGrid : Control
     private int RowIndexAt(int y)
     {
         int first = _vbar.Visible ? _vbar.Value : 0;
-        return first + (y - _headerHeight) / RowHeight;
+        return first + (y - HeaderPx) / RowHeight;
     }
 
     private void SelectByUser(int index)
@@ -418,7 +429,7 @@ internal sealed class RowGrid : Control
         base.OnMouseDown(e);
         Focus();
 
-        if (e.Y < _headerHeight)
+        if (e.Y < HeaderPx)
         {
             int headerColumn = ColumnAt(e.X);
             if (e.Button == MouseButtons.Left && headerColumn >= 0)
