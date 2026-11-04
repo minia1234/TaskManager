@@ -19,11 +19,38 @@ internal static class Program
             return SelfTest.Run(args[1]);
         }
 
+        // 한 번에 하나만 실행한다. 두 번째 실행은 이미 떠 있는 창을 앞으로 불러오고 끝난다(기록 파일을 두 프로세스가 덮어쓰지 않게).
+        using var activate = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\TaskMonitor.Activate", out bool first);
+        if (!first)
+        {
+            // 사용자가 방금 실행한 이 프로세스가 앞 창 권한을 가지고 있으니, 이미 떠 있는 창이 앞으로 올 수 있게 넘겨 준다.
+            AllowSetForegroundWindow(-1);
+            activate.Set();
+            return 0;
+        }
+
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) => ReportCrash(e.Exception, fatal: false);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => ReportCrash(e.ExceptionObject as Exception, fatal: true);
+
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new MainForm());
+        Application.Run(new MainForm(activate, startInTray: args.Contains("--tray")));
         return 0;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool AllowSetForegroundWindow(int processId);
+
+    private static void ReportCrash(Exception? ex, bool fatal)
+    {
+        FreezeLog.Crash(ex);
+        string next = fatal ? Strings.Localize("프로그램을 종료합니다.") : Strings.Localize("프로그램은 계속 실행됩니다.");
+        MessageBox.Show(
+            Strings.Localize("예기치 않은 오류가 발생했습니다. 내용은 다음 파일에 기록했습니다.") + Environment.NewLine
+            + FreezeLog.CrashPath + Environment.NewLine + next,
+            "TaskMonitor", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
     // 화면 없이 샘플 4회를 찍어 파일에 쓴다. 측정값을 Get-Counter 등과 비교할 때 쓴다.

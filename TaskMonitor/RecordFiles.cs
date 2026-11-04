@@ -11,6 +11,31 @@ internal static class RecordFolder
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TaskMonitor");
 }
 
+// 통째로 덮어쓰는 파일(설정, 앱 기록)용. 임시 파일에 다 쓴 뒤 바꿔 끼우므로, 쓰는 도중 꺼져도 이전 내용이 남는다.
+internal static class SafeFile
+{
+    public static void WriteAllText(string path, string text)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        string tmp = path + ".tmp";
+        File.WriteAllText(tmp, text);
+        File.Move(tmp, path, overwrite: true);
+    }
+
+    // 읽을 수 없는 파일은 지우지 않고 .bad로 옮겨 둔다. 다음 저장이 그 위에 빈 내용을 덮어쓰지 않게 한다.
+    public static void SetAside(string path)
+    {
+        try
+        {
+            File.Move(path, path + ".bad", overwrite: true);
+        }
+        catch (IOException)
+        {
+            // 옮기지 못하면 그대로 둔다. 다음 저장은 임시 파일을 거치므로 원본을 망치지 않는다.
+        }
+    }
+}
+
 internal sealed class JsonLinesFile
 {
     private static readonly UTF8Encoding Utf8 = new(false);
@@ -39,9 +64,9 @@ internal sealed class JsonLinesFile
 
                 File.AppendAllLines(FilePath, lines, Utf8);
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // 파일이 잠겼거나 디스크가 막힌 경우 다음 기록에서 다시 시도한다.
+                // 파일이 잠겼거나 권한·디스크가 막힌 경우 다음 기록에서 다시 시도한다.
             }
         }
     }
@@ -56,7 +81,10 @@ internal sealed class JsonLinesFile
                 continue;
             }
 
-            foreach (var line in File.ReadLines(file, Utf8))
+            // 쓰기·이름 바꾸기를 함께 허용해서 연다. 리포트가 수십 MB를 읽는 동안에도 매초 기록이 막히지 않는다.
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, Utf8);
+            while (reader.ReadLine() is { } line)
             {
                 yield return line;
             }

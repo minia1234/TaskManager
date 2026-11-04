@@ -96,13 +96,35 @@ internal sealed class MainForm : Form
     private readonly ToolStripButton _alertsButton;
     private bool _alertsOnlyOn;
 
+    // 실행 파일에 넣은 아이콘(csproj ApplicationIcon). 창, 작업 표시줄, 트레이가 같은 아이콘을 쓴다.
+    private static readonly Icon AppIcon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!) ?? SystemIcons.Application;
+    private readonly EventWaitHandle _activate;
+    private RegisteredWaitHandle? _activateWait;
+    // 메뉴의 "종료"처럼 정말 끝낼 때 켠다. 꺼져 있으면 X 단추는 설정에 따라 트레이로 숨긴다.
+    private bool _exiting;
+
     private int _currentPage = PageProcesses;
     private Snapshot? _last;
     private PerfSnapshot? _lastPerf;
 
-    public MainForm()
+    // activate: 두 번째 실행이 신호를 주는 이벤트(Program이 만든다). startInTray: Windows 시작 시 실행처럼 창 없이 트레이로 시작.
+    public MainForm(EventWaitHandle activate, bool startInTray)
     {
-        Text = "작업 관리자";
+        _activate = activate;
+        if (startInTray)
+        {
+            // 창을 잠깐도 보이지 않게 최소화·작업 표시줄 숨김으로 띄웠다가 Shown에서 트레이로 보낸다(Load는 창을 띄워야 돈다).
+            WindowState = FormWindowState.Minimized;
+            ShowInTaskbar = false;
+            Shown += (_, _) =>
+            {
+                HideToTray();
+                ShowInTaskbar = true;
+            };
+        }
+
+        Text = "TaskMonitor";
+        Icon = AppIcon;
         Width = 1180;
         Height = 760;
         MinimumSize = new Size(960, 600);
@@ -193,7 +215,7 @@ internal sealed class MainForm : Form
         topBar.Dock = DockStyle.Top;
         topBar.Height = 44;
         topBar.BackColor = TopBarColor;
-        var appTitle = new Label { Text = "작업 관리자", AutoSize = true, Left = 16, Top = 13, Font = BodyFont };
+        var appTitle = new Label { Text = "TaskMonitor", AutoSize = true, Left = 16, Top = 13, Font = BodyFont };
         var searchLabel = new Label { Text = "검색", AutoSize = true, Top = 13, Font = BodyFont };
         topBar.Controls.Add(appTitle);
         topBar.Controls.Add(searchLabel);
@@ -251,6 +273,13 @@ internal sealed class MainForm : Form
             _worker.SetTree(_settings.ProcessTree);
             _worker.Start();
             StartWatchdog();
+            _activateWait = ThreadPool.RegisterWaitForSingleObject(_activate, (_, _) =>
+            {
+                if (!_closing && IsHandleCreated)
+                {
+                    BeginInvoke(RestoreFromTray);
+                }
+            }, null, Timeout.Infinite, executeOnlyOnce: false);
         };
         Resize += (_, _) =>
         {
@@ -258,10 +287,22 @@ internal sealed class MainForm : Form
             {
                 HideToTray();
             }
+
+            UpdateBackground();
         };
-        FormClosing += (_, _) =>
+        VisibleChanged += (_, _) => UpdateBackground();
+        FormClosing += (_, e) =>
         {
+            if (e.CloseReason == CloseReason.UserClosing && _settings.CloseToTray && !_exiting)
+            {
+                // 기록과 경고는 켜져 있어야 의미가 있으므로, 원하면 X 단추로 끄지 않고 트레이로 보낸다.
+                e.Cancel = true;
+                HideToTray();
+                return;
+            }
+
             _closing = true;
+            _activateWait?.Unregister(null);
             _settings.Save();
             _worker?.Dispose();
             _tray.Visible = false;
@@ -361,7 +402,7 @@ internal sealed class MainForm : Form
         elevate.Enabled = !elevated;
         file.DropDownItems.Add(elevate);
         file.DropDownItems.Add(new ToolStripSeparator());
-        file.DropDownItems.Add(Item("종료", Close));
+        file.DropDownItems.Add(Item("종료", ExitApp));
 
         var options = new ToolStripMenuItem("옵션");
         _alwaysOnTop.Checked = _settings.AlwaysOnTop;
@@ -387,6 +428,20 @@ internal sealed class MainForm : Form
         options.DropDownItems.Add(_alwaysOnTop);
         options.DropDownItems.Add(_minimizeOnUse);
         options.DropDownItems.Add(_hideWhenMinimized);
+        var closeToTray = Item("닫기 단추로 트레이에 숨기기", () => { });
+        closeToTray.CheckOnClick = true;
+        closeToTray.Checked = _settings.CloseToTray;
+        closeToTray.Click += (_, _) =>
+        {
+            _settings.CloseToTray = closeToTray.Checked;
+            _settings.Save();
+        };
+        options.DropDownItems.Add(closeToTray);
+        var autoStart = Item("Windows 시작 시 실행", () => { });
+        autoStart.CheckOnClick = true;
+        autoStart.Checked = AutoStart.IsEnabled();
+        autoStart.Click += (_, _) => AutoStart.Set(autoStart.Checked);
+        options.DropDownItems.Add(autoStart);
         options.DropDownItems.Add(new ToolStripSeparator());
 
         var speed = new ToolStripMenuItem("업데이트 속도");
@@ -443,9 +498,12 @@ internal sealed class MainForm : Form
 
         var help = new ToolStripMenuItem("도움말");
         help.DropDownItems.Add(Item("정보", () => MessageBox.Show(this,
-            "작업 관리자 (TaskMonitor)" + Environment.NewLine
-            + "Windows 시스템 정보 API(ntdll, PDH, WTS, SCM)로 만든 작업 관리자입니다.",
-            "정보", MessageBoxButtons.OK, MessageBoxIcon.Information)));
+            $"TaskMonitor {Application.ProductVersion.Split('+')[0]}" + Environment.NewLine
+            + Strings.Localize("CPU를 누가 쓰는지 찾는 Windows 작업 관리자") + Environment.NewLine + Environment.NewLine
+            + Strings.Localize("기록 위치") + ": " + RecordFolder.Path + Environment.NewLine
+            + Strings.Localize("기록은 이 PC에만 저장되고 밖으로 보내지 않습니다.") + Environment.NewLine
+            + Strings.Localize("오픈 소스 고지") + ": THIRD-PARTY-NOTICES.txt",
+            Strings.Localize("정보"), MessageBoxButtons.OK, MessageBoxIcon.Information)));
 
         _menu.Items.Add(file);
         _menu.Items.Add(options);
@@ -456,13 +514,31 @@ internal sealed class MainForm : Form
 
     private void BuildTray()
     {
-        _tray.Icon = SystemIcons.Application;
-        _tray.Text = "작업 관리자";
+        _tray.Icon = AppIcon;
+        _tray.Text = "TaskMonitor";
         _tray.DoubleClick += (_, _) => RestoreFromTray();
         var trayMenu = new ContextMenuStrip();
-        trayMenu.Items.Add("열기", null, (_, _) => RestoreFromTray());
-        trayMenu.Items.Add("종료", null, (_, _) => Close());
+        trayMenu.Items.Add(Strings.Localize("열기"), null, (_, _) => RestoreFromTray());
+        trayMenu.Items.Add(Strings.Localize("종료"), null, (_, _) => ExitApp());
         _tray.ContextMenuStrip = trayMenu;
+    }
+
+    // 창이 안 보이면(최소화·트레이) 화면용 측정을 줄인다. 다시 보이면 지금 페이지의 표를 바로 다시 만든다.
+    private void UpdateBackground()
+    {
+        bool background = !Visible || WindowState == FormWindowState.Minimized;
+        bool returning = AppState.Background && !background;
+        AppState.Background = background;
+        if (returning)
+        {
+            _worker?.RequestPage(_currentPage);
+        }
+    }
+
+    private void ExitApp()
+    {
+        _exiting = true;
+        Close();
     }
 
     private void HideToTray()
@@ -709,18 +785,17 @@ internal sealed class MainForm : Form
             return;
         }
 
-        if (frame.Error is not null)
-        {
-            _status.Text = $"오류: {frame.Error}";
-            return;
-        }
-
         if (frame.Snapshot is { } snap)
         {
             _last = snap;
             _lastPerf = frame.Perf;
             UiStep("화면 반영: 성능", () => _performance.Update(snap, frame.Perf));
-            string status = Strings.Fmt("마지막 갱신 {0}   |   프로세스 {1}개   |   기록 파일: {2}", DateTime.Now.ToString("HH:mm:ss"), snap.ProcessCount, SpikeLog.FilePath);
+            string status = Strings.Fmt("마지막 갱신 {0}   |   프로세스 {1}개", DateTime.Now.ToString("HH:mm:ss"), snap.ProcessCount);
+            if (EtwLatest.Status != "실행 중" && EtwLatest.Status != "시작 전")
+            {
+                // 네트워크·FPS 열이 "-"인 이유를 알려 준다. 대부분 관리자 권한으로 다시 실행하면 풀린다(파일 메뉴).
+                status += $"   |   {Strings.Localize("네트워크·FPS 측정 꺼짐(관리자 권한으로 다시 실행)")}";
+            }
             if (_worker?.CpuTemperatureC is { } cpuTemp)
             {
                 status += $"   |   CPU {cpuTemp:F0}°C";
@@ -748,6 +823,12 @@ internal sealed class MainForm : Form
         {
             _appliedRows[frame.Page] = rows;
             UiStep("화면 반영: 표", () => GridFor(frame.Page)?.SetRows(rows));
+        }
+
+        // 오류가 있어도 받은 값은 위에서 반영했다. 상태 바에만 오류를 보인다.
+        if (frame.Error is not null)
+        {
+            _status.Text = $"{Strings.Localize("오류")}: {frame.Error}";
         }
     }
 
@@ -784,11 +865,11 @@ internal sealed class MainForm : Form
             return;
         }
 
-        var cpuColor = _last.TotalCpuPercent >= _settings.ThresholdPercent ? Color.Firebrick : Color.Black;
+        var cpuColor = _last.TotalCpuPercent >= _settings.ThresholdPercent ? Theme.Red : Theme.Fg;
         _processes.SetBig("cpu", $"{_last.TotalCpuPercent:F0}%", cpuColor);
 
         double memory = _lastPerf is { Memory.Total: > 0 } p ? 100.0 * p.Memory.Used / p.Memory.Total : 0;
-        _processes.SetBig("memory", $"{memory:F0}%", Color.Black);
+        _processes.SetBig("memory", $"{memory:F0}%", Theme.Fg);
     }
 
     private void ApplyFilter()

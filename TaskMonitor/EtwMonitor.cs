@@ -76,12 +76,14 @@ internal sealed class EtwMonitor : IDisposable
 
         try
         {
-            // 세션 이름에 PID를 붙여서 같은 이름의 오래된 세션과 겹치지 않게 한다.
-            var session = new TraceEventSession("TaskMonitor-" + Environment.ProcessId) { StopOnDispose = true };
+            // 고정 이름: 비정상 종료로 남은 세션을 다음 실행이 이어받아 정리한다(PID를 붙이면 재부팅 전까지 쌓인다).
+            // 한 번에 한 인스턴스만 실행되므로(Program) 이름이 겹칠 다른 소유자는 없다.
+            var session = new TraceEventSession("TaskMonitor-Etw") { StopOnDispose = true };
             _session = session;
-            session.EnableProvider("Microsoft-Windows-DXGI");
-            session.EnableProvider("Microsoft-Windows-Winsock-AFD");
-            session.EnableProvider("Microsoft-Windows-TCPIP");
+            // 쓰는 이벤트 ID만 켠다. 제공자 전체를 켜면 프레임·패킷마다 수십 개가 와서 파싱 비용이 CPU의 대부분을 차지한다.
+            Enable(session, "Microsoft-Windows-DXGI", DxgiPresentStart);
+            Enable(session, "Microsoft-Windows-Winsock-AFD", AfdSend, AfdReceive);
+            Enable(session, "Microsoft-Windows-TCPIP", TcpipUdpSend, TcpipUdpRecv);
             session.Source.Dynamic.All += Handle;
             _thread = new Thread(() =>
             {
@@ -109,6 +111,10 @@ internal sealed class EtwMonitor : IDisposable
             Status = "ETW 세션을 열지 못함: " + ex.Message;
         }
     }
+
+    private static void Enable(TraceEventSession session, string provider, params int[] eventIds) =>
+        session.EnableProvider(provider, TraceEventLevel.Verbose, ulong.MaxValue,
+            new TraceEventProviderOptions { EventIDsToEnable = eventIds.ToList() });
 
     private void Handle(TraceEvent d)
     {
@@ -265,6 +271,36 @@ internal sealed class EtwMonitor : IDisposable
         }
 
         return result;
+    }
+
+    // 끝난 프로세스의 값을 지운다. 표가 끝없이 커지지 않고, 같은 PID를 새로 받은 프로세스가 이전 누적을 물려받지 않는다.
+    public void Prune(IReadOnlyCollection<int> alive)
+    {
+        lock (_gate)
+        {
+            foreach (int pid in _presents.Keys.Where(p => !alive.Contains(p)).ToList())
+            {
+                _presents.Remove(pid);
+            }
+
+            foreach (var key in _tcpSendByLocation.Keys.Where(k => !alive.Contains(k.Pid)).ToList())
+            {
+                _tcpSendByLocation.Remove(key);
+            }
+
+            foreach (var table in new[] { _tcpReceived, _udpSent, _udpReceived })
+            {
+                foreach (int pid in table.Keys.Where(p => !alive.Contains(p)).ToList())
+                {
+                    table.Remove(pid);
+                }
+            }
+
+            foreach (int pid in _lastNet.Keys.Where(p => !alive.Contains(p)).ToList())
+            {
+                _lastNet.Remove(pid);
+            }
+        }
     }
 
     public void Dispose()

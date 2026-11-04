@@ -52,6 +52,7 @@ internal static class Nvapi
     private static EnumPhysicalGpusDelegate? _enumGpus;
     private static GetThermalSensorsDelegate? _getThermalSensors;
     private static GetBusIdDelegate? _getBusId;
+    private static readonly Dictionary<IntPtr, uint> SensorMasks = new();
 
     // 마지막 상태(자체 검증과 진단용)
     internal static string Status { get; private set; } = "아직 호출하지 않음";
@@ -152,7 +153,13 @@ internal static class Nvapi
 
     private static NvapiThermal ReadOne(int index, IntPtr handle, string name, int? bus)
     {
-        uint mask = FindSensorMask(handle);
+        // 센서 마스크는 GPU마다 바뀌지 않는다. 매초 다시 찾으면 드라이버 호출이 최대 32번 늘어난다.
+        if (!SensorMasks.TryGetValue(handle, out uint mask))
+        {
+            mask = FindSensorMask(handle);
+            SensorMasks[handle] = mask;
+        }
+
         var sensors = NewSensors(mask);
         if (mask == 0 || _getThermalSensors!(handle, ref sensors) != Ok)
         {

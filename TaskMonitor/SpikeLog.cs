@@ -17,14 +17,16 @@ internal static class SpikeLog
         bool isNew = !File.Exists(FilePath);
 
         var line = new StringBuilder();
-        line.Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"))
-            .Append(',').Append(snapshot.TotalCpuPercent.ToString("F1"))
-            .Append(',').Append(snapshot.DpcInterruptPercent.ToString("F1"))
-            .Append(',').Append(snapshot.UnattributedPercent.ToString("F1"));
+        // 소수점은 항상 "."로 쓴다. 독일어·프랑스어 Windows에서 "12,5"가 되면 쉼표 구분 열이 밀린다.
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        line.Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", inv))
+            .Append(',').Append(snapshot.TotalCpuPercent.ToString("F1", inv))
+            .Append(',').Append(snapshot.DpcInterruptPercent.ToString("F1", inv))
+            .Append(',').Append(snapshot.UnattributedPercent.ToString("F1", inv));
 
         foreach (var p in snapshot.Processes.Take(5))
         {
-            line.Append(',').Append($"{p.Name.Replace(',', '_')}({p.Pid}) {p.CpuPercent:F1}%");
+            line.Append(',').Append(FormattableString.Invariant($"{p.Name.Replace(',', '_')}({p.Pid}) {p.CpuPercent:F1}%"));
         }
 
         using var writer = new StreamWriter(FilePath, append: true, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));

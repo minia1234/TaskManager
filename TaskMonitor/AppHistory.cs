@@ -30,6 +30,7 @@ internal sealed class AppHistory
     private readonly object _gate = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly Dictionary<ProcessKey, string> _paths = new();
+    private readonly bool _saveDisabled;
     private Saved _data = new();
     private double _lastTime = double.NaN;
 
@@ -40,11 +41,20 @@ internal sealed class AppHistory
             if (File.Exists(FilePath))
             {
                 _data = JsonSerializer.Deserialize<Saved>(File.ReadAllText(FilePath)) ?? new Saved();
+                // 역직렬화한 사전은 대소문자를 구분한다. 경로 대소문자만 다른 같은 exe가 두 줄이 되지 않게 되돌린다.
+                _data.Apps = new Dictionary<string, Entry>(_data.Apps, StringComparer.OrdinalIgnoreCase);
             }
         }
-        catch (Exception ex) when (ex is JsonException or IOException)
+        catch (JsonException)
         {
-            // 손상된 기록 파일은 빈 기록으로 시작한다.
+            // 손상된 기록 파일은 .bad로 옮겨 두고 빈 기록으로 시작한다(다음 저장이 원본을 덮어쓰지 않게).
+            SafeFile.SetAside(FilePath);
+            _data = new Saved();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 읽지 못한 기록 위에 빈 기록을 저장하면 지난 기록이 사라진다. 이번 실행은 저장하지 않는다.
+            _saveDisabled = true;
             _data = new Saved();
         }
     }
@@ -130,6 +140,11 @@ internal sealed class AppHistory
 
     public void Save()
     {
+        if (_saveDisabled)
+        {
+            return;
+        }
+
         string json;
         lock (_gate)
         {
@@ -138,10 +153,9 @@ internal sealed class AppHistory
 
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, json);
+            SafeFile.WriteAllText(FilePath, json);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // 저장 실패는 화면 동작을 막지 않는다.
         }

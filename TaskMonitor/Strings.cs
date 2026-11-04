@@ -118,7 +118,19 @@ internal static class Strings
         ["게임"] = "Game",
         ["네트워크"] = "Network",
         ["측정 시작"] = "Since",
-        ["마지막 갱신 {0}   |   프로세스 {1}개   |   기록 파일: {2}"] = "Last update {0}   |   {1} processes   |   Log file: {2}",
+        ["마지막 갱신 {0}   |   프로세스 {1}개"] = "Last update {0}   |   {1} processes",
+        ["네트워크·FPS 측정 꺼짐(관리자 권한으로 다시 실행)"] = "Network and FPS off (run as administrator)",
+        ["오류"] = "Error",
+        ["CPU를 누가 쓰는지 찾는 Windows 작업 관리자"] = "A Windows task manager that finds what is using your CPU",
+        ["기록 위치"] = "Records folder",
+        ["기록은 이 PC에만 저장되고 밖으로 보내지 않습니다."] = "Records stay on this PC and are never sent anywhere.",
+        ["오픈 소스 고지"] = "Open-source notices",
+        ["열기"] = "Open",
+        ["닫기 단추로 트레이에 숨기기"] = "Close button hides to tray",
+        ["Windows 시작 시 실행"] = "Start with Windows",
+        ["예기치 않은 오류가 발생했습니다. 내용은 다음 파일에 기록했습니다."] = "An unexpected error occurred. Details were saved to:",
+        ["프로그램은 계속 실행됩니다."] = "TaskMonitor will keep running.",
+        ["프로그램을 종료합니다."] = "TaskMonitor will now close.",
     };
 
     private static readonly Dictionary<string, string> Korean = English.ToDictionary(kv => kv.Value, kv => kv.Key);

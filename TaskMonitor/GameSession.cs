@@ -102,7 +102,8 @@ internal sealed class GameSessionTracker
         }
 
         s.VramMax = Math.Max(s.VramMax, gpus.Sum(g => g.VramUsedBytes ?? 0));
-        if (gpus.Any(g => (g.ThrottleReasons ?? 0) != 0))
+        // NVML 비트 0x1(GPU 유휴)과 0x2(응용 프로그램 클럭 설정)는 성능을 깎는 제한이 아니므로 빼고 센다.
+        if (gpus.Any(g => ((g.ThrottleReasons ?? 0) & ~0x3L) != 0))
         {
             s.ThrottledSamples++;
         }

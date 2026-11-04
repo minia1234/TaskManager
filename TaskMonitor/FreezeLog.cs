@@ -7,16 +7,25 @@ internal static class FreezeLog
     internal static readonly string FilePath = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TaskMonitor", "freeze.log");
 
+    // 처리되지 않은 예외의 스택은 crash.log에 따로 남긴다(사용자가 그대로 보내 주면 원인을 찾을 수 있게).
+    internal static readonly string CrashPath = System.IO.Path.Combine(
+        System.IO.Path.GetDirectoryName(FilePath)!, "crash.log");
+
     private static readonly object Gate = new();
 
-    internal static void Write(string text)
+    internal static void Write(string text) => Append(FilePath, text);
+
+    internal static void Crash(Exception? ex) =>
+        Append(CrashPath, $"버전 {System.Windows.Forms.Application.ProductVersion}, {Environment.OSVersion}{Environment.NewLine}{ex}");
+
+    private static void Append(string path, string text)
     {
         try
         {
             lock (Gate)
             {
-                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(FilePath)!);
-                File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {text}{Environment.NewLine}");
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+                File.AppendAllText(path, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {text}{Environment.NewLine}");
             }
         }
         catch (Exception)

@@ -188,7 +188,15 @@ internal sealed class GridPage : UserControl
             return;
         }
 
-        MenuFactory?.Invoke(row)?.Show(_grid, point);
+        if (MenuFactory?.Invoke(row) is not { } menu)
+        {
+            return;
+        }
+
+        // 메뉴는 우클릭마다 새로 만든다. 닫힌 뒤 해제해야 창 핸들과 행·스냅샷을 붙잡은 클로저가 쌓이지 않는다.
+        // 항목 클릭 처리가 끝난 다음에 해제되도록 BeginInvoke로 미룬다.
+        menu.Closed += (_, _) => BeginInvoke(menu.Dispose);
+        menu.Show(_grid, point);
     }
 
     private void OnHeaderClicked(string key)

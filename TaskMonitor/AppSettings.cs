@@ -14,7 +14,10 @@ internal sealed class AppSettings
     public bool GroupProcesses { get; set; } = true;
     public bool ProcessTree { get; set; }                  // 프로세스 목록을 부모-자식 트리로 보기
     public string ColorTheme { get; set; } = "light";     // light | dark | system
-    public string Language { get; set; } = "ko";          // ko | en (다음 실행부터 적용)
+    // ko | en (다음 실행부터 적용). 처음 실행은 Windows 표시 언어를 따른다.
+    public string Language { get; set; } =
+        System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ko" ? "ko" : "en";
+    public bool CloseToTray { get; set; }                  // X 단추로 끄지 않고 트레이에 숨기기
     public Dictionary<string, List<string>> Columns { get; set; } = new();
 
     private static string FilePath => Path.Combine(
@@ -26,12 +29,20 @@ internal sealed class AppSettings
         {
             if (File.Exists(FilePath))
             {
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
+                var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
+                // 손으로 고친 파일에 "Columns": null이 있어도 시작이 죽지 않게 한다.
+                loaded.Columns ??= new();
+                return loaded;
             }
         }
-        catch (Exception ex) when (ex is JsonException or IOException)
+        catch (JsonException)
         {
-            // 손상된 설정 파일은 기본값으로 시작한다.
+            // 손상된 설정 파일은 .bad로 옮기고 기본값으로 시작한다.
+            SafeFile.SetAside(FilePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 잠겨서 못 읽으면 기본값으로 시작한다(파일은 그대로 둔다).
         }
 
         return new AppSettings();
@@ -41,10 +52,9 @@ internal sealed class AppSettings
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            SafeFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // 저장 실패는 화면 동작을 막지 않는다.
         }

@@ -209,8 +209,12 @@ internal static class Nvml
         int? pcieWidth = ToInt(nvmlDeviceGetCurrPcieLinkWidth(device, out uint pw), pw);
         int? pcieMaxGen = ToInt(nvmlDeviceGetMaxPcieLinkGeneration(device, out uint pmg), pmg);
         int? pcieMaxWidth = ToInt(nvmlDeviceGetMaxPcieLinkWidth(device, out uint pmw), pmw);
-        long? tx = ToLong(nvmlDeviceGetPcieThroughput(device, PcieTx, out uint txv), txv);
-        long? rx = ToLong(nvmlDeviceGetPcieThroughput(device, PcieRx, out uint rxv), rxv);
+        // PCIe 처리량(호출마다 약 30ms 걸림), 프로세스 목록, 인코딩 세션은 성능 페이지에서만 보인다. 창이 안 보이면 건너뛴다.
+        bool detail = !AppState.Background;
+        long? tx = detail ? ToLong(nvmlDeviceGetPcieThroughput(device, PcieTx, out uint txv), txv) : null;
+        long? rx = detail ? ToLong(nvmlDeviceGetPcieThroughput(device, PcieRx, out uint rxv), rxv) : null;
+        IReadOnlyList<GpuProcessMemory> procs = detail ? Processes(device) : Array.Empty<GpuProcessMemory>();
+        IReadOnlyList<GpuEncoderSession> sessions = detail ? EncoderSessions(device) : Array.Empty<GpuEncoderSession>();
         var pci = PciLocation(device);
 
         return new GpuDetail(
@@ -238,9 +242,9 @@ internal static class Nvml
             pcieMaxWidth,
             tx,
             rx,
-            Processes(device),
+            procs,
             ThrottleReasons(device),
-            EncoderSessions(device),
+            sessions,
             null,
             null,
             pci?.Bus,

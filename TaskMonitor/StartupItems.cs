@@ -8,9 +8,34 @@ internal sealed record StartupRow(string Name, string Command, string Publisher,
 
 // 시작 프로그램: Run 키 목록과 StartupApproved 키로 사용 여부를 읽고 바꾼다.
 // 작업 관리자와 같은 방식이다. HKLM을 바꾸려면 관리자 권한이 필요하다.
+// 이 앱을 Windows 시작 시 실행: HKCU Run 키에 "<exe> --tray"를 쓴다(관리자 권한 없이).
+internal static class AutoStart
+{
+    private const string ValueName = "TaskMonitor";
+
+    public static bool IsEnabled()
+    {
+        using var run = Registry.CurrentUser.OpenSubKey(StartupItems.RunPath);
+        return run?.GetValue(ValueName) is string;
+    }
+
+    public static void Set(bool enabled)
+    {
+        using var run = Registry.CurrentUser.CreateSubKey(StartupItems.RunPath);
+        if (enabled)
+        {
+            run.SetValue(ValueName, $"\"{Environment.ProcessPath}\" --tray");
+        }
+        else
+        {
+            run.DeleteValue(ValueName, throwOnMissingValue: false);
+        }
+    }
+}
+
 internal static class StartupItems
 {
-    private const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    internal const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string ApprovedPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 
     internal static List<StartupRow> Enumerate()

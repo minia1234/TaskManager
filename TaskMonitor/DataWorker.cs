@@ -2,6 +2,12 @@ using System.Diagnostics;
 
 namespace TaskMonitor;
 
+// 창이 안 보일 때(최소화, 트레이)는 화면용 작업을 줄인다. 기록·경고에 쓰는 측정은 그대로 둔다.
+internal static class AppState
+{
+    public static volatile bool Background;
+}
+
 // 백그라운드 데이터 작업자: 프로세스 목록과 표의 행을 만든다. UI 스레드는 완성된 결과(Frame)만 받아서 그린다.
 // 서비스, 시작 프로그램, 사용자 열거는 Windows 서비스 관리자나 네트워크 조회에 따라 오래 걸리거나 막힐 수 있어서
 // 별도 작업으로 돌린다. 그 작업이 막혀도 프로세스와 성능 갱신은 계속된다.
@@ -38,6 +44,7 @@ internal sealed class DataWorker : IDisposable
     private volatile IReadOnlyList<double> _fanRpm = Array.Empty<double>();
     private DateTime _lastResourceWrite = DateTime.MinValue;
     private int _activityShown = -1;
+    private string? _lastSideError;
 
     private volatile bool _stop;
     private volatile int _page;
@@ -186,24 +193,25 @@ internal sealed class DataWorker : IDisposable
                     if (DateTime.Now - _lastHistorySave >= TimeSpan.FromSeconds(60))
                     {
                         _lastHistorySave = DateTime.Now;
-                        _history.Save();
+                        RunSideStage("앱 기록 저장", _history.Save);
                     }
 
                     _info.BeginTick(40);
                     _info.Prune(snap.Processes.Select(p => (p.Pid, p.CreateTime)));
                     if (_logEnabled && snap.TotalCpuPercent >= _threshold)
                     {
-                        RunStage("기록 파일", () => SpikeLog.Append(snap));
+                        RunSideStage("기록 파일", () => SpikeLog.Append(snap));
                     }
 
-                    RunStage("장기 기록", () => RecordActivity(snap));
+                    RunSideStage("장기 기록", () => RecordActivity(snap));
                     rebuild = true;
                 }
             }
 
             var snapshot = _snapshot;
             var perf = _perf.Latest;
-            if (snapshot is not null)
+            // 아무도 보지 않는 표는 만들지 않는다. 창이 다시 보이면 MainForm이 RequestPage로 다시 만들게 한다.
+            if (snapshot is not null && !AppState.Background)
             {
                 bool slowDue = forceSample || rebuild || DateTime.Now - _lastSlow >= SlowInterval;
                 switch (page)
@@ -230,11 +238,48 @@ internal sealed class DataWorker : IDisposable
                 }
             }
 
-            _publish(new Frame(page, snapshot, perf, GetRows(page), null));
+            Publish(new Frame(page, snapshot, perf, GetRows(page), null));
         }
         catch (Exception ex)
         {
-            _publish(new Frame(page, _snapshot, _perf.Latest, GetRows(page), ex.Message));
+            Publish(new Frame(page, _snapshot, _perf.Latest, GetRows(page), ex.Message));
+        }
+    }
+
+    // 종료 중에는 화면이 이미 없을 수 있다. 그때 보내면 작업 스레드에서 예외가 나 프로세스가 죽는다.
+    private void Publish(Frame frame)
+    {
+        if (_stop)
+        {
+            return;
+        }
+
+        try
+        {
+            _publish(frame);
+        }
+        catch (InvalidOperationException)
+        {
+            // 창이 닫히는 중이다.
+        }
+    }
+
+    // 파일 쓰기 같은 기록 단계는 실패해도 화면 갱신을 막지 않는다(예: spike-log.csv를 Excel이 잠금).
+    // 같은 실패가 매초 반복되므로 내용이 바뀔 때만 freeze.log에 남긴다.
+    private void RunSideStage(string name, Action work)
+    {
+        try
+        {
+            RunStage(name, work);
+        }
+        catch (Exception ex)
+        {
+            string message = $"기록 단계 '{name}' 실패: {ex.GetType().Name} {ex.Message}";
+            if (message != _lastSideError)
+            {
+                _lastSideError = message;
+                FreezeLog.Write(message);
+            }
         }
     }
 
@@ -253,6 +298,7 @@ internal sealed class DataWorker : IDisposable
         _fanRpm = sensors.Where(r => r.Kind == HwinfoSensors.KindFan && r.Unit.Contains("RPM", StringComparison.OrdinalIgnoreCase))
             .Select(r => r.Value).Take(3).ToList();
         var alerts = _alerts.Evaluate(now, snap, perf, gpus, DiskHealthMonitor.Latest, cpuTemp);
+        _etw.Prune(snap.Processes.Select(p => p.Pid).ToHashSet());
         var frames = _etw.Frames(now);
         var rates = _etw.Rates(now);
         EtwLatest.Publish(frames, rates, _etw.Totals(), _etw.Status);
@@ -355,7 +401,7 @@ internal sealed class DataWorker : IDisposable
             Interlocked.Exchange(ref _slowBusy[page], 0);
         }
 
-        _publish(new Frame(page, _snapshot, _perf.Latest, GetRows(page), error));
+        Publish(new Frame(page, _snapshot, _perf.Latest, GetRows(page), error));
     }
 
     private IReadOnlyList<Row>? GetRows(int page)
@@ -391,8 +437,12 @@ internal sealed class DataWorker : IDisposable
             _thread.Join(2000);
         }
 
-        _history.Save();
+        RunSideStage("앱 기록 저장", _history.Save);
         _etw.Dispose();
-        _wake.Dispose();
+        // 작업 스레드가 아직 막혀 있으면(도메인 계정 조회 등) 깨어났을 때 쓸 수 있게 이벤트를 남겨 둔다.
+        if (!_thread.IsAlive)
+        {
+            _wake.Dispose();
+        }
     }
 }

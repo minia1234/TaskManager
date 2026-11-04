@@ -213,7 +213,8 @@ internal sealed class RowGrid : Control
 
         // 세로 스크롤바가 필요한지 먼저 보고, 가로 스크롤바가 생기면 높이가 줄어 한 번 더 확인한다.
         bool vNeeded = _rows.Count > Math.Max(1, (Height - _headerHeight) / RowHeight);
-        int cw = Width - (vNeeded ? sbw : 0);
+        // 최소화나 트레이 시작처럼 창이 스크롤바보다 좁을 때도 폭이 음수가 되지 않게 한다(스크롤바 LargeChange가 음수면 예외).
+        int cw = Math.Max(1, Width - (vNeeded ? sbw : 0));
         LayoutColumns(cw);
         bool hNeeded = _totalWidth > cw;
         int ch = Height - (hNeeded ? sbh : 0);
@@ -221,7 +222,7 @@ internal sealed class RowGrid : Control
         bool vFinal = _rows.Count > visible;
         if (vFinal != vNeeded)
         {
-            cw = Width - (vFinal ? sbw : 0);
+            cw = Math.Max(1, Width - (vFinal ? sbw : 0));
             LayoutColumns(cw);
             hNeeded = _totalWidth > cw;
         }

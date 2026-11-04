@@ -725,6 +725,44 @@ internal static class SelfTest
                     $"프레젠트 중인 프로세스 {frameNow.Count}개" + (frameNow.Count > 0 ? $", 최고 {frameNow.Values.Max(f => f.Fps):F0} FPS" : ""));
             }
 
+            // 안전한 파일 쓰기: 바꿔 끼운 뒤 임시 파일이 남지 않고, 깨진 파일은 지우지 않고 .bad로 옮긴다.
+            string safePath = Path.Combine(recordDir, "safe.json");
+            SafeFile.WriteAllText(safePath, "{\"a\":1}");
+            SafeFile.WriteAllText(safePath, "{\"a\":2}");
+            bool written = File.ReadAllText(safePath) == "{\"a\":2}" && !File.Exists(safePath + ".tmp");
+            SafeFile.SetAside(safePath);
+            bool setAside = !File.Exists(safePath) && File.ReadAllText(safePath + ".bad") == "{\"a\":2}";
+            Check("안전한 파일 쓰기(바꿔 끼우기, 깨진 파일 보존)", written && setAside, $"쓰기 {written}, 옮기기 {setAside}");
+
+            // Windows 시작 시 실행: 켜고 끄면 HKCU Run 값이 생기고 지워진다. 사용자의 원래 상태로 되돌려 둔다.
+            bool autoStartBefore = AutoStart.IsEnabled();
+            try
+            {
+                AutoStart.Set(true);
+                bool on = AutoStart.IsEnabled();
+                AutoStart.Set(false);
+                bool off = !AutoStart.IsEnabled();
+                Check("Windows 시작 시 실행 켜기·끄기", on && off, $"켜짐 {on}, 꺼짐 {off}");
+            }
+            finally
+            {
+                AutoStart.Set(autoStartBefore);
+            }
+
+            // 아주 작은 표(최소화·트레이 시작): 스크롤바보다 좁아도 예외가 나지 않아야 한다(예전에는 LargeChange 음수로 죽었다).
+            try
+            {
+                var tiny = new GridPage(RowBuilders.ActivityColumns, RowBuilders.ActivityColumns.Select(c => c.Key)) { Size = new System.Drawing.Size(4, 4) };
+                tiny.SetRows(RowBuilders.Activity(Enumerable.Range(0, 50)
+                    .Select(i => new ActivityEvent(DateTime.Now, ActivityLog.Start, "p" + i, "d", i)).ToList()));
+                tiny.Grid.Size = new System.Drawing.Size(2, 2);
+                Check("아주 작은 표 크기(최소화 시작)", true, "예외 없음");
+            }
+            catch (Exception ex)
+            {
+                Check("아주 작은 표 크기(최소화 시작)", false, ex.Message);
+            }
+
             // 이벤트 페이지 안내 문구: 행이 없으면 보이고, 행이 생기면 가려진다.
             var emptyPage = new GridPage(RowBuilders.ActivityColumns, RowBuilders.ActivityColumns.Select(c => c.Key)) { EmptyText = "안내" };
             emptyPage.SetRows(new List<Row>());
