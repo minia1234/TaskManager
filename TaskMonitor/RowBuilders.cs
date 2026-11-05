@@ -29,7 +29,7 @@ internal static class RowBuilders
         new("conn", "연결", 60, Right: true),
         new("net", "네트워크", 110, Right: true),
         new("fps", "FPS", 60, Right: true),
-        new("user", "사용자", 170),
+        new("user", "사용자 이름", 170),
         new("session", "세션", 60, Right: true),
         new("arch", "아키텍처", 80),
         new("private", "개인 작업 세트", 120, Right: true),
@@ -46,7 +46,7 @@ internal static class RowBuilders
         new("name", "이름", 260, Fill: true),
         new("pid", "PID", 70, Right: true),
         new("status", "상태", 110),
-        new("user", "사용자", 170),
+        new("user", "사용자 이름", 170),
         new("cpu", "CPU", 70, Right: true),
         new("memory", "메모리", 100, Right: true),
         new("private", "개인 작업 세트", 120, Right: true),
@@ -87,7 +87,7 @@ internal static class RowBuilders
 
     public static readonly ColumnDef[] UserColumns =
     {
-        new("name", "사용자", 200),
+        new("name", "사용자 이름", 200),
         new("id", "ID", 70, Right: true),
         new("status", "상태", 120),
         new("station", "세션 이름", 180, Fill: true),
@@ -216,7 +216,7 @@ internal static class RowBuilders
 
     public static readonly ColumnDef[] ActivityColumns =
     {
-        new("time", "시각", 90),
+        new("time", "시각", 120),
         new("kind", "구분", 90),
         new("subject", "대상", 260, Fill: true),
         new("detail", "내용", 380),
@@ -231,11 +231,11 @@ internal static class RowBuilders
         {
             var e = events[i];
             var row = new Row { Key = $"evt:{i}:{e.Time.Ticks}:{e.Kind}:{e.Pid}" };
-            row.Cells["time"] = e.Time.ToString("HH:mm:ss");
+            row.Cells["time"] = e.Time.ToString(e.Time.Date == DateTime.Today ? "HH:mm:ss" : "MM-dd HH:mm:ss");
             row.Sort["time"] = e.Time.Ticks;
             row.Cells["kind"] = KindLabel(e.Kind);
             row.Sort["kind"] = e.Kind;
-            row.Cells["subject"] = e.Subject;
+            row.Cells["subject"] = Strings.Localize(e.Subject);
             row.Sort["subject"] = e.Subject;
             row.Cells["detail"] = e.Detail;
             row.Sort["detail"] = e.Detail;
@@ -254,10 +254,10 @@ internal static class RowBuilders
 
     private static string KindLabel(string kind) => kind switch
     {
-        ActivityLog.Start => "시작",
-        ActivityLog.Exit => "종료",
-        ActivityLog.Game => "게임",
-        _ => "경고",
+        ActivityLog.Start => Strings.Localize("시작"),
+        ActivityLog.Exit => Strings.Localize("종료"),
+        ActivityLog.Game => Strings.Localize("게임"),
+        _ => Strings.Localize("경고"),
     };
 
     public static List<Row> Details(Snapshot s, ProcessInfoCache info, IReadOnlyDictionary<int, double> gpu)
@@ -307,8 +307,8 @@ internal static class RowBuilders
             row.Sort["desc"] = svc.DisplayName;
             row.Cells["pid"] = svc.ProcessId > 0 ? svc.ProcessId.ToString() : "-";
             row.Sort["pid"] = svc.ProcessId;
-            row.Cells["status"] = ServiceList.StateName(svc.State);
-            row.Sort["status"] = ServiceList.StateName(svc.State);
+            row.Cells["status"] = Strings.Localize(ServiceList.StateName(svc.State));
+            row.Sort["status"] = row.Cells["status"];
             return row;
         }).ToList();
     }
@@ -322,7 +322,8 @@ internal static class RowBuilders
             row.Sort["name"] = item.Name;
             row.Cells["publisher"] = item.Publisher;
             row.Sort["publisher"] = item.Publisher;
-            string status = item.Enabled ? "사용" : "사용 안 함";
+            // 버튼 문구(사용, 사용 안 함)와 상태 값은 영어에서 단어가 달라 따로 고른다.
+            string status = Strings.IsEnglish ? (item.Enabled ? "Enabled" : "Disabled") : (item.Enabled ? "사용" : "사용 안 함");
             row.Cells["status"] = status;
             row.Sort["status"] = status;
             row.Cells["command"] = item.Command;
@@ -340,8 +341,8 @@ internal static class RowBuilders
             row.Sort["name"] = s.UserName;
             row.Cells["id"] = s.Id.ToString();
             row.Sort["id"] = s.Id;
-            row.Cells["status"] = s.State;
-            row.Sort["status"] = s.State;
+            row.Cells["status"] = Strings.Localize(s.State);
+            row.Sort["status"] = row.Cells["status"];
             row.Cells["station"] = s.WinStation;
             row.Sort["station"] = s.WinStation;
             return row;
@@ -357,8 +358,8 @@ internal static class RowBuilders
         var row = new Row { Key = "pid:" + p.Pid, Tag = target, Icon = IconCache.Get(detail.Path) };
         row.Cells["name"] = indent + p.Name;
         row.Sort["name"] = p.Name;
-        row.Cells["status"] = "실행 중";
-        row.Sort["status"] = "실행 중";
+        row.Cells["status"] = Strings.Localize("실행 중");
+        row.Sort["status"] = row.Cells["status"];
         row.Cells["cpu"] = FormatPercent(p.CpuPercent);
         row.Sort["cpu"] = p.CpuPercent;
         row.Heat["cpu"] = CpuHeat(p.CpuPercent);
@@ -412,7 +413,7 @@ internal static class RowBuilders
         row.Sort["arch"] = detail.Architecture;
         row.Cells["private"] = FormatMemory(p.PrivateBytes);
         row.Sort["private"] = p.PrivateBytes;
-        row.Cells["eco"] = eco ? "예" : "아니요";
+        row.Cells["eco"] = Strings.Localize(eco ? "예" : "아니요");
         row.Sort["eco"] = eco ? 1 : 0;
         row.Cells["desc"] = detail.Description;
         row.Sort["desc"] = detail.Description;
@@ -428,7 +429,7 @@ internal static class RowBuilders
         var row = new Row { Key = $"exit:{e.Pid}:{e.ExitedAt.Ticks}", Tag = null, Fore = Color.Gray };
         row.Cells["name"] = e.Name;
         row.Sort["name"] = e.Name;
-        row.Cells["status"] = $"종료됨 ({e.ExitedAt:HH:mm:ss})";
+        row.Cells["status"] = Strings.Fmt("종료됨 ({0:HH:mm:ss})", e.ExitedAt);
         row.Cells["cpu"] = FormatPercent(e.LastCpuPercent);
         row.Sort["cpu"] = e.LastCpuPercent;
         row.Cells["pid"] = e.Pid.ToString();
@@ -439,9 +440,10 @@ internal static class RowBuilders
     private static Row SystemRow(string key, string name, string status, double percent)
     {
         var row = new Row { Key = key, Tag = null };
+        name = Strings.Localize(name);
         row.Cells["name"] = name;
         row.Sort["name"] = name;
-        row.Cells["status"] = status;
+        row.Cells["status"] = Strings.Localize(status);
         row.Cells["cpu"] = FormatPercent(percent);
         row.Sort["cpu"] = percent;
         row.Heat["cpu"] = CpuHeat(percent);

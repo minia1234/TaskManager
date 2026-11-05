@@ -143,7 +143,7 @@ internal sealed class MainForm : Form
 
 
         _pages = new Control[] { _processes, _performance, _historyPage, _startup, _users, _details, _services, _eventsPage };
-        _eventsPage.EmptyText = "아직 기록이 없습니다. 프로세스 시작·종료, 경고, 게임 세션이 여기에 쌓입니다.";
+        _eventsPage.EmptyText = Strings.Localize("아직 기록이 없습니다. 프로세스 시작·종료, 경고, 게임 세션이 여기에 쌓입니다.");
         foreach (var page in _pages)
         {
             _content.Controls.Add(page);
@@ -322,7 +322,7 @@ internal sealed class MainForm : Form
             }
         };
 
-        _status.Text = "데이터 수집 중...";
+        _status.Text = Strings.Localize("데이터 수집 중...");
         ShowPage(PageProcesses);
         SetInterval(_settings.UpdateIntervalMs, save: false);
     }
@@ -657,7 +657,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "관리자 권한으로 다시 실행", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, ex.Message, Strings.Localize("관리자 권한으로 다시 실행"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -808,7 +808,7 @@ internal sealed class MainForm : Form
                 status += $"   |   CPU {cpuTemp:F0}°C";
                 if (_worker?.FanRpm is { Count: > 0 } fans)
                 {
-                    status += $"   팬 {string.Join(" / ", fans.Select(rpm => rpm.ToString("F0")))} RPM";
+                    status += Strings.Fmt("   팬 {0} RPM", string.Join(" / ", fans.Select(rpm => rpm.ToString("F0"))));
                 }
             }
 
@@ -1028,10 +1028,10 @@ internal sealed class MainForm : Form
 
     private void EndTarget(ProcTarget target, bool tree)
     {
-        string what = target.IsGroup ? $"{target.Name} ({target.Members.Count}개)" : target.Name;
-        string title = tree ? "작업 트리 끝내기" : "작업 끝내기";
+        string what = target.IsGroup ? Strings.Fmt("{0} ({1}개)", target.Name, target.Members.Count) : target.Name;
+        string title = Strings.Localize(tree ? "작업 트리 끝내기" : "작업 끝내기");
         var answer = MessageBox.Show(this,
-            $"{what} 작업을 끝내시겠습니까?{Environment.NewLine}저장되지 않은 데이터는 잃을 수 있습니다.",
+            Strings.Fmt("{0} 작업을 끝내시겠습니까?", what) + Environment.NewLine + Strings.Localize("저장되지 않은 데이터는 잃을 수 있습니다."),
             title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
         if (answer != DialogResult.Yes)
         {
@@ -1054,7 +1054,7 @@ internal sealed class MainForm : Form
                 failed += ProcessActions.EndTree(member, all);
             }
 
-            return failed > 0 ? $"{failed}개 프로세스는 끝내지 못했습니다(권한 부족 또는 이미 종료됨)." : null;
+            return failed > 0 ? Strings.Fmt("{0}개 프로세스는 끝내지 못했습니다(권한 부족 또는 이미 종료됨).", failed) : null;
         });
     }
 
@@ -1086,7 +1086,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "선호도 설정", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, ex.Message, Strings.Localize("선호도 설정"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -1114,8 +1114,8 @@ internal sealed class MainForm : Form
             }
 
             var answer = MessageBox.Show(this,
-                $"덤프 파일을 저장했습니다.{Environment.NewLine}{path}{Environment.NewLine}{Environment.NewLine}폴더를 열까요?",
-                "덤프 파일 만들기", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                Strings.Localize("덤프 파일을 저장했습니다.") + Environment.NewLine + path + Environment.NewLine + Environment.NewLine + Strings.Localize("폴더를 열까요?"),
+                Strings.Localize("덤프 파일 만들기"), MessageBoxButtons.YesNo, MessageBoxIcon.Information);
             if (answer == DialogResult.Yes)
             {
                 RunBackground("파일 위치 열기", () => Attempt(() => ProcessActions.OpenFileLocation(path)));
@@ -1130,7 +1130,7 @@ internal sealed class MainForm : Form
         {
             if (!ProcessActions.SwitchTo(pid))
             {
-                throw new InvalidOperationException("이 프로세스에서 보이는 창을 찾지 못했습니다.");
+                throw new InvalidOperationException(Strings.Localize("이 프로세스에서 보이는 창을 찾지 못했습니다."));
             }
         }), () =>
         {
@@ -1168,7 +1168,7 @@ internal sealed class MainForm : Form
     // 프로세스 분석 창: 한 프로세스의 실행 정보와 자원, 연결, 최근 활동을 1초마다 새로 보여 준다.
     private void OpenAnalysis(int pid)
     {
-        var form = new ProcessAnalysisForm($"프로세스 분석 - PID {pid}",
+        var form = new ProcessAnalysisForm(Strings.Fmt("프로세스 분석 - PID {0}", pid),
             () => ProcessAnalysisText.Build(pid, _last, _lastPerf, _worker?.Activity));
         form.Show(this);
     }
@@ -1181,7 +1181,7 @@ internal sealed class MainForm : Form
         {
             if (_worker is not { } worker)
             {
-                return "아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요.";
+                return Strings.Localize("아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요.");
             }
 
             string folder = Path.Combine(RecordFolder.Path, "reports");
@@ -1207,7 +1207,7 @@ internal sealed class MainForm : Form
         {
             if (_worker is not { } worker)
             {
-                return "아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요.";
+                return Strings.Localize("아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요.");
             }
 
             folder = Path.Combine(RecordFolder.Path, "export", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
@@ -1235,7 +1235,7 @@ internal sealed class MainForm : Form
     {
         if (_worker is not { } worker)
         {
-            MessageBox.Show(this, "아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요.", "기록 비교", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, Strings.Localize("아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요."), Strings.Localize("기록 비교"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -1263,9 +1263,9 @@ internal sealed class MainForm : Form
         if (confirm)
         {
             var answer = MessageBox.Show(this,
-                $"{service.DisplayName} ({service.Name})에 대해 \"{title}\" 작업을 진행할까요?{Environment.NewLine}" +
-                "이 서비스를 쓰는 프로그램은 잠깐 동작을 멈출 수 있습니다.",
-                title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                Strings.Fmt("{0} ({1})에 대해 \"{2}\" 작업을 진행할까요?", service.DisplayName, service.Name, Strings.Localize(title)) + Environment.NewLine +
+                Strings.Localize("이 서비스를 쓰는 프로그램은 잠깐 동작을 멈출 수 있습니다."),
+                Strings.Localize(title), MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (answer != DialogResult.Yes)
             {
                 return;
@@ -1295,7 +1295,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        if (MessageBox.Show(this, question, "사용자", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+        if (MessageBox.Show(this, Strings.Localize(question), Strings.Localize("사용자"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
         {
             return;
         }
@@ -1316,7 +1316,7 @@ internal sealed class MainForm : Form
         string? text = Dialogs.SendMessage(this);
         if (text is not null)
         {
-            RunBackground("메시지 보내기", () => Attempt(() => Sessions.SendMessage(session.Id, "작업 관리자", text)));
+            RunBackground("메시지 보내기", () => Attempt(() => Sessions.SendMessage(session.Id, Strings.Localize("작업 관리자"), text)));
         }
     }
 
@@ -1330,7 +1330,7 @@ internal sealed class MainForm : Form
         };
         if (page is null)
         {
-            MessageBox.Show(this, "열 선택은 프로세스와 세부 정보 페이지에서 쓸 수 있습니다.", "열 선택",
+            MessageBox.Show(this, Strings.Localize("열 선택은 프로세스와 세부 정보 페이지에서 쓸 수 있습니다."), Strings.Localize("열 선택"),
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
@@ -1351,7 +1351,7 @@ internal sealed class MainForm : Form
     private void RunBackground(string title, Func<string?> work, Action? onSuccess = null)
     {
         _currentWork = title;
-        _status.Text = $"{title} 중...";
+        _status.Text = Strings.Fmt("{0} 중...", Strings.Localize(title));
         Task.Run(() =>
         {
             string? error;
@@ -1374,7 +1374,7 @@ internal sealed class MainForm : Form
                 _currentWork = "없음";
                 if (error is not null)
                 {
-                    MessageBox.Show(this, error, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show(this, error, Strings.Localize(title), MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
                 else
                 {
@@ -1409,7 +1409,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "작업 관리자", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this, ex.Message, Strings.Localize("작업 관리자"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 

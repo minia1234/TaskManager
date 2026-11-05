@@ -17,23 +17,23 @@ internal static class RecordComparison
         var eb = activity.ReadRange(b.From, b.To);
 
         var sb = new StringBuilder();
-        sb.AppendLine($"기간 A: {a.From:yyyy-MM-dd HH:mm} ~ {a.To:yyyy-MM-dd HH:mm} (자원 표본 {ra.Count}개)");
-        sb.AppendLine($"기간 B: {b.From:yyyy-MM-dd HH:mm} ~ {b.To:yyyy-MM-dd HH:mm} (자원 표본 {rb.Count}개)");
+        sb.AppendLine(Strings.Fmt("기간 A: {0:yyyy-MM-dd HH:mm} ~ {1:yyyy-MM-dd HH:mm} (자원 표본 {2}개)", a.From, a.To, ra.Count));
+        sb.AppendLine(Strings.Fmt("기간 B: {0:yyyy-MM-dd HH:mm} ~ {1:yyyy-MM-dd HH:mm} (자원 표본 {2}개)", b.From, b.To, rb.Count));
         sb.AppendLine();
-        sb.AppendLine($"{"항목",-12}{"A 평균",10}{"B 평균",10}{"차이(B-A)",12}{"A 최고",10}{"B 최고",10}");
+        sb.AppendLine($"{Strings.Localize("항목"),-12}{Strings.Localize("A 평균"),10}{Strings.Localize("B 평균"),10}{Strings.Localize("차이(B-A)"),12}{Strings.Localize("A 최고"),10}{Strings.Localize("B 최고"),10}");
         Row(sb, "CPU %", ra.Select(s => s.CpuPercent), rb.Select(s => s.CpuPercent));
-        Row(sb, "메모리 %", ra.Select(s => s.RamPercent), rb.Select(s => s.RamPercent));
-        Row(sb, "GPU 사용 %", ra.Select(s => s.GpuPercent), rb.Select(s => s.GpuPercent));
-        Row(sb, "GPU 온도 °C", ra.Where(s => s.GpuTempC is not null).Select(s => (double)s.GpuTempC!.Value),
+        Row(sb, Strings.Localize("메모리 %"), ra.Select(s => s.RamPercent), rb.Select(s => s.RamPercent));
+        Row(sb, Strings.Localize("GPU 사용 %"), ra.Select(s => s.GpuPercent), rb.Select(s => s.GpuPercent));
+        Row(sb, Strings.Localize("GPU 온도 °C"), ra.Where(s => s.GpuTempC is not null).Select(s => (double)s.GpuTempC!.Value),
             rb.Where(s => s.GpuTempC is not null).Select(s => (double)s.GpuTempC!.Value));
         Row(sb, "VRAM GB", ra.Where(s => s.VramUsedBytes is not null).Select(s => s.VramUsedBytes!.Value / 1073741824.0),
             rb.Where(s => s.VramUsedBytes is not null).Select(s => s.VramUsedBytes!.Value / 1073741824.0));
         sb.AppendLine();
-        sb.AppendLine($"경고: A {Count(ea, ActivityLog.Alert)}건, B {Count(eb, ActivityLog.Alert)}건");
-        sb.AppendLine($"게임 세션(끝난 것): A {Ended(ea)}회, B {Ended(eb)}회");
-        sb.AppendLine($"프로세스 시작: A {Count(ea, ActivityLog.Start)}건, B {Count(eb, ActivityLog.Start)}건");
+        sb.AppendLine(Strings.Fmt("경고: A {0}건, B {1}건", Count(ea, ActivityLog.Alert), Count(eb, ActivityLog.Alert)));
+        sb.AppendLine(Strings.Fmt("게임 세션(끝난 것): A {0}회, B {1}회", Ended(ea), Ended(eb)));
+        sb.AppendLine(Strings.Fmt("프로세스 시작: A {0}건, B {1}건", Count(ea, ActivityLog.Start), Count(eb, ActivityLog.Start)));
         sb.AppendLine();
-        sb.AppendLine("차이는 B에서 A를 뺀 값이다. 양수면 B가 높다. 프레임 속도는 측정하지 않는다.");
+        sb.AppendLine(Strings.Localize("차이는 B에서 A를 뺀 값이다. 양수면 B가 높다. 프레임 속도는 측정하지 않는다."));
         return sb.ToString();
     }
 
@@ -53,7 +53,7 @@ internal static class RecordComparison
     private static int Count(IReadOnlyList<ActivityEvent> events, string kind) => events.Count(e => e.Kind == kind);
 
     private static int Ended(IReadOnlyList<ActivityEvent> events) =>
-        events.Count(e => e.Kind == ActivityLog.Game && e.Detail.StartsWith("끝", StringComparison.Ordinal));
+        events.Count(GameSessionTracker.IsEnded);
 }
 
 // 기록 비교 창: 기간 A와 B를 고르면 비교 표를 만든다. 파일 읽기는 백그라운드에서 한다.
@@ -65,7 +65,7 @@ internal sealed class RecordComparisonForm : Form
     private readonly DateTimePicker _aTo = Picker(DateTime.Now);
     private readonly DateTimePicker _bFrom = Picker(DateTime.Now.AddHours(-2));
     private readonly DateTimePicker _bTo = Picker(DateTime.Now.AddHours(-1));
-    private readonly Button _compare = new() { Text = "비교", Width = 90, Height = 30 };
+    private readonly Button _compare = new() { Text = Strings.Localize("비교"), Width = 90, Height = 30 };
     private readonly TextBox _result = new()
     {
         Multiline = true,
@@ -80,20 +80,20 @@ internal sealed class RecordComparisonForm : Form
     {
         _resources = resources;
         _activity = activity;
-        Text = "기록 비교";
+        Text = Strings.Localize("기록 비교");
         Width = 760;
         Height = 520;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Theme.Bg;
 
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 110, Padding = new Padding(10), AutoSize = false };
-        top.Controls.Add(Caption("기간 A 시작"));
+        top.Controls.Add(Caption(Strings.Localize("기간 A 시작")));
         top.Controls.Add(_aFrom);
-        top.Controls.Add(Caption("끝"));
+        top.Controls.Add(Caption(Strings.Localize("끝")));
         top.Controls.Add(_aTo);
-        top.Controls.Add(Caption("기간 B 시작"));
+        top.Controls.Add(Caption(Strings.Localize("기간 B 시작")));
         top.Controls.Add(_bFrom);
-        top.Controls.Add(Caption("끝"));
+        top.Controls.Add(Caption(Strings.Localize("끝")));
         top.Controls.Add(_bTo);
         top.Controls.Add(_compare);
         top.SetFlowBreak(_aTo, true);

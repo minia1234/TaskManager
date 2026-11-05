@@ -11,7 +11,7 @@ internal static class Dialogs
         var list = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true };
         foreach (var column in all)
         {
-            list.Items.Add(column.Header, visible.Contains(column.Key));
+            list.Items.Add(Strings.Localize(column.Header), visible.Contains(column.Key));
         }
 
         form.Controls.Add(list);
@@ -37,11 +37,11 @@ internal static class Dialogs
     {
         using var form = BaseForm("새 작업 실행", 440, 200);
         var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12) };
-        var admin = new CheckBox { Text = "관리자 권한으로 이 작업 만들기", Dock = DockStyle.Top, Height = 30 };
+        var admin = new CheckBox { Text = Strings.Localize("관리자 권한으로 이 작업 만들기"), Dock = DockStyle.Top, Height = 30 };
         var input = new TextBox { Dock = DockStyle.Top };
         var label = new Label
         {
-            Text = "열 프로그램, 폴더, 문서 또는 인터넷 리소스의 이름을 입력하십시오.",
+            Text = Strings.Localize("열 프로그램, 폴더, 문서 또는 인터넷 리소스의 이름을 입력하십시오."),
             Dock = DockStyle.Top,
             Height = 40,
         };
@@ -88,7 +88,7 @@ internal static class Dialogs
 
         if (mask == 0)
         {
-            MessageBox.Show(owner, "프로세서를 하나 이상 선택해야 합니다.", "선호도 설정", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(owner, Strings.Localize("프로세서를 하나 이상 선택해야 합니다."), Strings.Localize("선호도 설정"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return null;
         }
 
@@ -100,7 +100,7 @@ internal static class Dialogs
         using var form = BaseForm("메시지 보내기", 440, 240);
         var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12) };
         var input = new TextBox { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Vertical };
-        var label = new Label { Text = "보낼 메시지:", Dock = DockStyle.Top, Height = 24 };
+        var label = new Label { Text = Strings.Localize("보낼 메시지:"), Dock = DockStyle.Top, Height = 24 };
         body.Controls.Add(input);
         body.Controls.Add(label);
         form.Controls.Add(body);

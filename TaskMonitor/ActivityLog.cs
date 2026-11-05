@@ -131,7 +131,7 @@ internal sealed class ProcessEventTracker
             {
                 if (!_previous.ContainsKey(key))
                 {
-                    events.Add(new ActivityEvent(now, ActivityLog.Start, p.Name, $"PID {p.Pid}, 부모 PID {p.ParentPid}", p.Pid));
+                    events.Add(new ActivityEvent(now, ActivityLog.Start, p.Name, Strings.Fmt("PID {0}, 부모 PID {1}", p.Pid, p.ParentPid), p.Pid));
                 }
             }
 
@@ -178,7 +178,7 @@ internal sealed class AlertRules
         // CPU 온도: HWiNFO 공유 메모리로 읽을 수 있을 때만 본다(없으면 경고도 없다).
         if (cpuTempC is { } cpuTemp)
         {
-            Edge(alerts, now, "cpu-temp", cpuTemp, CpuTempLimitC, "CPU 과열", $"CPU {cpuTemp:F0}°C (기준 {CpuTempLimitC}°C)");
+            Edge(alerts, now, "cpu-temp", cpuTemp, CpuTempLimitC, "CPU 과열", Strings.Fmt("CPU {0:F0}°C (기준 {1}°C)", cpuTemp, CpuTempLimitC));
         }
 
         // 프로세스 하나가 전체 CPU의 50% 이상을 20초 넘게 쓰면 한 번 경고한다. 그 프로세스가 내려가거나 끝나면 다시 울릴 수 있다.
@@ -189,8 +189,8 @@ internal sealed class AlertRules
             if (!_hotAlerted.Contains(p.Key) && now - _hotSince[p.Key] >= CpuSustain)
             {
                 _hotAlerted.Add(p.Key);
-                alerts.Add(new ActivityEvent(now, ActivityLog.Alert, "프로세스 CPU 급증",
-                    $"{p.Name}({p.Pid}) {p.CpuPercent:F0}% (전체 CPU 50% 이상 20초 지속)", p.Pid));
+                alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("프로세스 CPU 급증"),
+                    Strings.Fmt("{0}({1}) {2:F0}% (전체 CPU 50% 이상 20초 지속)", p.Name, p.Pid, p.CpuPercent), p.Pid));
             }
         }
 
@@ -214,8 +214,8 @@ internal sealed class AlertRules
         bool cpuSustained = _cpuHighSince is { } since && now - since >= CpuSustain;
         var top = snapshot.Processes.FirstOrDefault();
         string cpuDetail = top is null
-            ? $"전체 {snapshot.TotalCpuPercent:F0}%"
-            : $"전체 {snapshot.TotalCpuPercent:F0}%, 상위: {top.Name}({top.Pid}) {top.CpuPercent:F0}%";
+            ? Strings.Fmt("전체 {0:F0}%", snapshot.TotalCpuPercent)
+            : Strings.Fmt("전체 {0:F0}%, 상위: {1}({2}) {3:F0}%", snapshot.TotalCpuPercent, top.Name, top.Pid, top.CpuPercent);
         Edge(alerts, now, "cpu", cpuSustained ? 100 : 0, 100, "CPU 높음 지속", cpuDetail);
 
         // 메모리: 사용 중인 비율이 90%를 넘으면 경고한다.
@@ -223,7 +223,7 @@ internal sealed class AlertRules
         if (memory.Total > 0)
         {
             double ramPercent = 100.0 * (memory.Total - memory.Available) / memory.Total;
-            Edge(alerts, now, "ram", ramPercent, RamPercentLimit, "메모리 부족", $"사용 {ramPercent:F0}%");
+            Edge(alerts, now, "ram", ramPercent, RamPercentLimit, "메모리 부족", Strings.Fmt("사용 {0:F0}%", ramPercent));
         }
 
         // GPU: 코어·핫스팟 중 높은 온도와 메모리 접합부 온도를 본다.
@@ -232,12 +232,12 @@ internal sealed class AlertRules
             if (gpu.TemperatureC is not null || gpu.HotSpotC is not null)
             {
                 int peak = Math.Max(gpu.TemperatureC ?? 0, gpu.HotSpotC ?? 0);
-                Edge(alerts, now, "gpu-temp:" + gpu.Name, peak, GpuTempLimitC, "GPU 과열", $"{gpu.Name} {peak}°C (기준 {GpuTempLimitC}°C)");
+                Edge(alerts, now, "gpu-temp:" + gpu.Name, peak, GpuTempLimitC, "GPU 과열", Strings.Fmt("{0} {1}°C (기준 {2}°C)", gpu.Name, peak, GpuTempLimitC));
             }
 
             if (gpu.MemoryJunctionC is { } junction)
             {
-                Edge(alerts, now, "gpu-junction:" + gpu.Name, junction, GpuJunctionLimitC, "GPU 메모리 과열", $"{gpu.Name} 접합부 {junction}°C (기준 {GpuJunctionLimitC}°C)");
+                Edge(alerts, now, "gpu-junction:" + gpu.Name, junction, GpuJunctionLimitC, "GPU 메모리 과열", Strings.Fmt("{0} 접합부 {1}°C (기준 {2}°C)", gpu.Name, junction, GpuJunctionLimitC));
             }
         }
 
@@ -246,7 +246,7 @@ internal sealed class AlertRules
         {
             if (disk.TemperatureC is { } temp)
             {
-                Edge(alerts, now, "disk-temp:" + disk.Number, temp, DiskTempLimitC, "디스크 과열", $"{disk.Identity.Model} {temp}°C (기준 {DiskTempLimitC}°C)");
+                Edge(alerts, now, "disk-temp:" + disk.Number, temp, DiskTempLimitC, "디스크 과열", Strings.Fmt("{0} {1}°C (기준 {2}°C)", disk.Identity.Model, temp, DiskTempLimitC));
             }
         }
 
@@ -260,7 +260,7 @@ internal sealed class AlertRules
         if (!active && value >= limit)
         {
             _active[key] = true;
-            alerts.Add(new ActivityEvent(now, ActivityLog.Alert, subject, detail, 0));
+            alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize(subject), detail, 0));
         }
         else if (active && value < limit - Hysteresis)
         {

@@ -59,7 +59,7 @@ internal sealed class GameSessionTracker
 
             _current = new Session { Name = usage.Name, Pid = pid, Start = now };
             _candidateSince = null;
-            events.Add(new ActivityEvent(now, ActivityLog.Game, usage.Name, $"시작 (PID {pid})", pid));
+            events.Add(new ActivityEvent(now, ActivityLog.Game, usage.Name, Strings.Fmt("시작 (PID {0})", pid), pid));
         }
 
         var session = _current;
@@ -114,13 +114,18 @@ internal sealed class GameSessionTracker
         double n = Math.Max(1, s.Samples);
         string temp = s.TempMax is { } t ? $"{t}°C" : "-";
         string fps = s.FrameSamples > 0
-            ? $"FPS 평균 {s.FpsSum / s.FrameSamples:F0}·1% 하위 {s.LowFpsSum / s.FrameSamples:F0}, "
-            : "FPS 측정 없음, ";
-        return $"끝 (PID {s.Pid}) {FormatSpan(end - s.Start)}, {fps}CPU 평균 {s.CpuSum / n:F0}%·최고 {s.CpuMax:F0}%, "
-            + $"GPU 3D 평균 {s.GpuSum / n:F0}%·최고 {s.GpuMax:F0}%, GPU 온도 최고 {temp}, "
-            + $"VRAM 최고 {s.VramMax / 1073741824.0:F1}GB, 클럭 제한 {s.ThrottledSamples}회(샘플 {s.Samples}개)";
+            ? Strings.Fmt("FPS 평균 {0:F0}·1% 하위 {1:F0}, ", s.FpsSum / s.FrameSamples, s.LowFpsSum / s.FrameSamples)
+            : Strings.Localize("FPS 측정 없음, ");
+        return Strings.Fmt("끝 (PID {0}) {1}, {2}CPU 평균 {3:F0}%·최고 {4:F0}%, ", s.Pid, FormatSpan(end - s.Start), fps, s.CpuSum / n, s.CpuMax)
+            + Strings.Fmt("GPU 3D 평균 {0:F0}%·최고 {1:F0}%, GPU 온도 최고 {2}, ", s.GpuSum / n, s.GpuMax, temp)
+            + Strings.Fmt("VRAM 최고 {0:F1}GB, 클럭 제한 {1}회(샘플 {2}개)", s.VramMax / 1073741824.0, s.ThrottledSamples, s.Samples);
     }
 
+    // 끝난 세션 기록인지 본다. 기록 파일은 쓴 시점의 언어로 남으므로 한국어와 영어 시작 글자를 모두 인정한다.
+    internal static bool IsEnded(ActivityEvent e) =>
+        e.Kind == ActivityLog.Game
+        && (e.Detail.StartsWith("끝", StringComparison.Ordinal) || e.Detail.StartsWith("Ended", StringComparison.Ordinal));
+
     private static string FormatSpan(TimeSpan span) =>
-        span.TotalHours >= 1 ? $"{(int)span.TotalHours}시간 {span.Minutes}분" : $"{span.Minutes}분 {span.Seconds}초";
+        span.TotalHours >= 1 ? Strings.Fmt("{0}시간 {1}분", (int)span.TotalHours, span.Minutes) : Strings.Fmt("{0}분 {1}초", span.Minutes, span.Seconds);
 }

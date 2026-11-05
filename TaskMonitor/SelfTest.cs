@@ -382,6 +382,8 @@ internal static class SelfTest
         Strings.Apply("ko");
         bool koreanOk = Strings.Localize("File") == "파일" && Strings.Localize("프로세스") == "프로세스";
         Check("언어 전환(한국어·영어)", englishOk && koreanOk, $"영어 {englishOk}, 한국어 복귀 {koreanOk}");
+        var slotMismatches = Strings.PlaceholderMismatches();
+        Check("영어 문구 자리 표시자 일치", slotMismatches.Count == 0, slotMismatches.Count == 0 ? "모두 일치" : string.Join(" | ", slotMismatches));
 
         // 현재 실행 권한: 관리자 권한 여부는 메뉴 항목과 SMART 읽기 가능 여부를 결정한다(정보용이라 항상 통과).
         Check("실행 권한", true, MainForm.IsElevated() ? "관리자 권한으로 실행 중" : "일반 권한으로 실행 중");

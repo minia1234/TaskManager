@@ -44,7 +44,7 @@ internal static class Sessions
                 var s = Marshal.PtrToStructure<Win32.WtsSessionInfo>(IntPtr.Add(sessions, i * size));
                 string user = QueryString(s.SessionId, WtsUserName);
                 string station = Marshal.PtrToStringUni(s.WinStationName) ?? "";
-                result.Add(new SessionRow((int)s.SessionId, user.Length == 0 ? "(시스템)" : user, StateName(s.State), station));
+                result.Add(new SessionRow((int)s.SessionId, user.Length == 0 ? Strings.Localize("(시스템)") : user, StateName(s.State), station));
             }
 
             return result;

@@ -235,7 +235,7 @@ internal sealed class SystemPerf : IDisposable
             string id = parts.Length > 0 ? parts[0] : instance;
             string letters = parts.Length > 1 ? parts[1].Trim() : "";
             var (total, free, type) = SizeOf(letters);
-            string name = $"디스크 {id}" + (letters.Length > 0 ? $" ({letters})" : "");
+            string name = Strings.Fmt("디스크 {0}", id) + (letters.Length > 0 ? $" ({letters})" : "");
             disks.Add(new DiskStats(
                 name,
                 letters,

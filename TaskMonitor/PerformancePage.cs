@@ -197,7 +197,7 @@ internal sealed class PerformancePage : UserControl
             row.Cells["worst"] = a.Worst;
             row.Cells["threshold"] = a.Threshold;
             row.Cells["raw"] = a.Raw;
-            row.Cells["status"] = a.Bad ? "경고" : "정상";
+            row.Cells["status"] = Strings.Localize(a.Bad ? "경고" : "정상");
             rows.Add(row);
         }
 
@@ -208,6 +208,7 @@ internal sealed class PerformancePage : UserControl
     private void RenderGpu(Entry selected)
     {
         var rows = new List<Row>();
+        static string L(string korean) => Strings.Localize(korean);
         void Add(string key, string item, string value)
         {
             var row = new Row { Key = key };
@@ -219,44 +220,44 @@ internal sealed class PerformancePage : UserControl
         var g = selected.Gpu;
         if (g is null)
         {
-            Add("none", "상세 정보", "NVIDIA 상세 값을 읽지 못했습니다. NVIDIA GPU가 아니거나 드라이버가 없습니다.");
+            Add("none", L("상세 정보"), L("NVIDIA 상세 값을 읽지 못했습니다. NVIDIA GPU가 아니거나 드라이버가 없습니다."));
         }
         else
         {
-            Add("driver", "드라이버 버전", g.DriverVersion);
-            Add("temp", "온도", Num(g.TemperatureC, "°C"));
-            Add("hotspot", "핫스팟 온도", Num(g.HotSpotC, "°C"));
-            Add("memjunction", "메모리 접합부 온도", Num(g.MemoryJunctionC, "°C"));
-            Add("fan", "팬 속도", Num(g.FanPercent, "%"));
-            Add("util", "GPU 사용률", Num(g.GpuUtilPercent, "%"));
-            Add("memutil", "메모리 컨트롤러 사용률", Num(g.MemoryUtilPercent, "%"));
-            Add("encoder", "인코더 사용률", Num(g.EncoderPercent, "%"));
-            Add("decoder", "디코더 사용률", Num(g.DecoderPercent, "%"));
-            Add("vram", "VRAM 사용량",
+            Add("driver", L("드라이버 버전"), g.DriverVersion);
+            Add("temp", L("온도"), Num(g.TemperatureC, "°C"));
+            Add("hotspot", L("핫스팟 온도"), Num(g.HotSpotC, "°C"));
+            Add("memjunction", L("메모리 접합부 온도"), Num(g.MemoryJunctionC, "°C"));
+            Add("fan", L("팬 속도"), Num(g.FanPercent, "%"));
+            Add("util", L("GPU 사용률"), Num(g.GpuUtilPercent, "%"));
+            Add("memutil", L("메모리 컨트롤러 사용률"), Num(g.MemoryUtilPercent, "%"));
+            Add("encoder", L("인코더 사용률"), Num(g.EncoderPercent, "%"));
+            Add("decoder", L("디코더 사용률"), Num(g.DecoderPercent, "%"));
+            Add("vram", L("VRAM 사용량"),
                 g.VramUsedBytes is { } used && g.VramTotalBytes is { } total
                     ? $"{FormatSize(used)} / {FormatSize(total)} ({100.0 * used / total:F0}%)"
                     : "-");
-            Add("power", "전력",
+            Add("power", L("전력"),
                 g.PowerWatts is { } watts
-                    ? $"{watts:F1} W" + (g.PowerLimitWatts is { } limit ? $" (제한 {limit:F0} W)" : "")
+                    ? $"{watts:F1} W" + (g.PowerLimitWatts is { } limit ? Strings.Fmt(" (제한 {0:F0} W)", limit) : "")
                     : "-");
-            Add("clock.gr", "그래픽 클럭", Pair(g.GraphicsMHz, g.GraphicsMaxMHz, "MHz"));
-            Add("clock.sm", "SM 클럭", Num(g.SmMHz, " MHz"));
-            Add("clock.mem", "메모리 클럭", Num(g.MemoryMHz, " MHz"));
-            Add("clock.video", "영상 클럭", Num(g.VideoMHz, " MHz"));
-            Add("pstate", "성능 상태", g.PerformanceState is { } state ? $"P{state}" : "-");
-            Add("throttle", "클럭 제한 원인", ThrottleText(g.ThrottleReasons));
-            Add("pcie", "PCIe 링크",
+            Add("clock.gr", L("그래픽 클럭"), Pair(g.GraphicsMHz, g.GraphicsMaxMHz, "MHz"));
+            Add("clock.sm", L("SM 클럭"), Num(g.SmMHz, " MHz"));
+            Add("clock.mem", L("메모리 클럭"), Num(g.MemoryMHz, " MHz"));
+            Add("clock.video", L("영상 클럭"), Num(g.VideoMHz, " MHz"));
+            Add("pstate", L("성능 상태"), g.PerformanceState is { } state ? $"P{state}" : "-");
+            Add("throttle", L("클럭 제한 원인"), ThrottleText(g.ThrottleReasons));
+            Add("pcie", L("PCIe 링크"),
                 g.PcieGen is { } gen && g.PcieWidth is { } width
-                    ? $"{gen}세대 x{width} (최대 {g.PcieMaxGen}세대 x{g.PcieMaxWidth})"
+                    ? Strings.Fmt("{0}세대 x{1} (최대 {2}세대 x{3})", gen, width, g.PcieMaxGen, g.PcieMaxWidth)
                     : "-");
-            Add("pcie.io", "PCIe 송신 / 수신",
+            Add("pcie.io", L("PCIe 송신 / 수신"),
                 g.PcieTxKbPerSec is { } tx && g.PcieRxKbPerSec is { } rx
                     ? $"{tx / 1024.0:F1} / {rx / 1024.0:F1} MB/s"
                     : "-");
             foreach (var (label, value) in selected.Subs)
             {
-                Add("engine/" + label, "엔진 " + label, $"{value:F1}%");
+                Add("engine/" + label, Strings.Fmt("엔진 {0}", label), $"{value:F1}%");
             }
 
             // 프로세스별 VRAM: 문서화된 GPU Process Memory 카운터를 우선 쓰고, 없으면 NVML 목록을 쓴다.
@@ -264,22 +265,22 @@ internal sealed class PerformancePage : UserControl
             foreach (var p in processes.Take(8))
             {
                 string who = _names.TryGetValue(p.Pid, out var name) ? name : "PID " + p.Pid;
-                Add("proc/" + p.Pid, $"VRAM 사용: {who} ({p.Pid})", FormatSize(p.Bytes));
+                Add("proc/" + p.Pid, Strings.Fmt("VRAM 사용: {0} ({1})", who, p.Pid), FormatSize(p.Bytes));
             }
 
             foreach (var s in g.EncoderSessions)
             {
-                Add("enc/" + s.Pid + "/" + s.Codec, $"인코딩 세션: PID {s.Pid}", $"{s.Codec}  {s.Width}x{s.Height}  {s.Fps} fps");
+                Add("enc/" + s.Pid + "/" + s.Codec, Strings.Fmt("인코딩 세션: PID {0}", s.Pid), $"{s.Codec}  {s.Width}x{s.Height}  {s.Fps} fps");
             }
 
             if (g.EncoderSessions.Count == 0)
             {
-                Add("enc", "인코딩 세션(NVENC)", "없음");
+                Add("enc", L("인코딩 세션(NVENC)"), L("없음"));
             }
 
             if (processes.Count == 0)
             {
-                Add("proc", "프로세스별 VRAM", "제공되지 않음(WDDM 드라이버는 프로세스별 사용량을 숨길 수 있습니다)");
+                Add("proc", L("프로세스별 VRAM"), L("제공되지 않음(WDDM 드라이버는 프로세스별 사용량을 숨길 수 있습니다)"));
             }
         }
 
@@ -309,11 +310,11 @@ internal sealed class PerformancePage : UserControl
 
         if (b == 0)
         {
-            return "제한 없음";
+            return Strings.Localize("제한 없음");
         }
 
-        var names = ThrottleLabels.Where(t => (b & t.Mask) != 0).Select(t => t.Label).ToList();
-        return names.Count > 0 ? string.Join(", ", names) : $"알 수 없음(0x{b:X})";
+        var names = ThrottleLabels.Where(t => (b & t.Mask) != 0).Select(t => Strings.Localize(t.Label)).ToList();
+        return names.Count > 0 ? string.Join(", ", names) : Strings.Fmt("알 수 없음(0x{0:X})", b);
     }
 
     private static string Num(int? value, string unit) => value is { } v ? v + unit : "-";
@@ -326,19 +327,19 @@ internal sealed class PerformancePage : UserControl
     {
         if (h is null)
         {
-            return "\r\n건강 정보: 이 장치에서 읽지 못했습니다.";
+            return "\r\n" + Strings.Localize("건강 정보: 이 장치에서 읽지 못했습니다.");
         }
 
         string temperature = h.TemperatureC is { } t ? $"{t}°C" : "-";
         string life = h.LifeLeftPercent is { } l ? $"{l}%" : "-";
-        string hours = h.PowerOnHours is { } p ? $"{p:N0}시간" : "-";
-        string cycles = h.PowerCycles is { } c ? $"{c:N0}회" : "-";
-        string io = h.HostReadBytes is { } r ? $"읽기 {FormatSize(r)}   쓰기 {FormatSize(h.HostWriteBytes ?? 0)}" : "";
+        string hours = h.PowerOnHours is { } p ? Strings.Fmt("{0:N0}시간", p) : "-";
+        string cycles = h.PowerCycles is { } c ? Strings.Fmt("{0:N0}회", c) : "-";
+        string io = h.HostReadBytes is { } r ? Strings.Fmt("읽기 {0}   쓰기 {1}", FormatSize(r), FormatSize(h.HostWriteBytes ?? 0)) : "";
         return "\r\n"
-            + $"{h.Identity.Model} · {h.Identity.Bus} · 상태 {h.Verdict}\r\n"
-            + $"온도 {temperature}   남은 수명 {life}   사용 시간 {hours}   전원 켬 {cycles}\r\n"
+            + Strings.Fmt("{0} · {1} · 상태 {2}", h.Identity.Model, h.Identity.Bus, h.Verdict) + "\r\n"
+            + Strings.Fmt("온도 {0}   남은 수명 {1}   사용 시간 {2}   전원 켬 {3}", temperature, life, hours, cycles) + "\r\n"
             + (io.Length > 0 ? io + "\r\n" : "")
-            + $"펌웨어 {h.Identity.Firmware}   일련번호 {h.Identity.Serial}"
+            + Strings.Fmt("펌웨어 {0}   일련번호 {1}", h.Identity.Firmware, h.Identity.Serial)
             + (h.Note.Length > 0 ? "\r\n" + h.Note : "");
     }
 
@@ -400,24 +401,24 @@ internal sealed class PerformancePage : UserControl
             "cpu",
             "CPU",
             $"{snap.TotalCpuPercent:F0}%   {ghz:F2} GHz",
-            $"사용률 {snap.TotalCpuPercent:F1}%   사용자 {snap.UserPercent:F1}%   커널 {snap.KernelPercent:F1}%   DPC·인터럽트 {snap.DpcInterruptPercent:F1}%\r\n"
-                + $"속도 {ghz:F2} GHz (기준 {baseGhz:F2} GHz)   논리 프로세서 {snap.LogicalProcessors}개\r\n"
-                + $"프로세스 {snap.ProcessCount}개   스레드 {snap.TotalThreads}개   핸들 {snap.TotalHandles}개\r\n"
-                + $"가동 시간 {Uptime()}",
+            Strings.Fmt("사용률 {0:F1}%   사용자 {1:F1}%   커널 {2:F1}%   DPC·인터럽트 {3:F1}%", snap.TotalCpuPercent, snap.UserPercent, snap.KernelPercent, snap.DpcInterruptPercent) + "\r\n"
+                + Strings.Fmt("속도 {0:F2} GHz (기준 {1:F2} GHz)   논리 프로세서 {2}개", ghz, baseGhz, snap.LogicalProcessors) + "\r\n"
+                + Strings.Fmt("프로세스 {0}개   스레드 {1}개   핸들 {2}개", snap.ProcessCount, snap.TotalThreads, snap.TotalHandles) + "\r\n"
+                + Strings.Fmt("가동 시간 {0}", Uptime()),
             snap.TotalCpuPercent,
             CpuColor,
-            snap.PerCpuPercent.Select((v, i) => ($"코어 {i}", v)).ToList()));
+            snap.PerCpuPercent.Select((v, i) => (Strings.Fmt("코어 {0}", i), v)).ToList()));
 
         var m = perf.Memory;
         double memPercent = m.Total > 0 ? m.Used * 100.0 / m.Total : 0;
         double commitPercent = m.CommitLimit > 0 ? m.Committed * 100.0 / m.CommitLimit : 0;
         list.Add(new Entry(
             "mem",
-            "메모리",
+            Strings.Localize("메모리"),
             $"{memPercent:F0}%   {Gb(m.Used):F1} / {Gb(m.Total):F1} GB",
-            $"사용 중 {FormatSize(m.Used)}   사용 가능 {FormatSize(m.Available)}   전체 {FormatSize(m.Total)}\r\n"
-                + $"커밋 {FormatSize(m.Committed)} / {FormatSize(m.CommitLimit)} ({commitPercent:F0}%)\r\n"
-                + $"캐시 {FormatSize(m.Cache)}   페이지 풀 {FormatSize(m.PagedPool)}   비페이지 풀 {FormatSize(m.NonPagedPool)}",
+            Strings.Fmt("사용 중 {0}   사용 가능 {1}   전체 {2}", FormatSize(m.Used), FormatSize(m.Available), FormatSize(m.Total)) + "\r\n"
+                + Strings.Fmt("커밋 {0} / {1} ({2:F0}%)", FormatSize(m.Committed), FormatSize(m.CommitLimit), commitPercent) + "\r\n"
+                + Strings.Fmt("캐시 {0}   페이지 풀 {1}   비페이지 풀 {2}", FormatSize(m.Cache), FormatSize(m.PagedPool), FormatSize(m.NonPagedPool)),
             memPercent,
             MemoryColor,
             Array.Empty<(string Label, double Value)>()));
@@ -425,16 +426,16 @@ internal sealed class PerformancePage : UserControl
         foreach (var d in perf.Disks)
         {
             string capacity = d.TotalBytes > 0
-                ? $"용량 {FormatSize(d.TotalBytes - d.FreeBytes)} / {FormatSize(d.TotalBytes)} ({d.Type})"
-                : "용량 정보 없음";
-            string letters = d.Letters.Length > 0 ? d.Letters : "드라이브 문자 없음";
+                ? Strings.Fmt("용량 {0} / {1} ({2})", FormatSize(d.TotalBytes - d.FreeBytes), FormatSize(d.TotalBytes), d.Type)
+                : Strings.Localize("용량 정보 없음");
+            string letters = d.Letters.Length > 0 ? d.Letters : Strings.Localize("드라이브 문자 없음");
             list.Add(new Entry(
                 "disk/" + d.Name,
                 d.Name,
                 $"{d.BusyPercent:F0}%   R {RowBuilders.FormatRate(d.ReadBytesPerSec)}  W {RowBuilders.FormatRate(d.WriteBytesPerSec)}",
-                $"활성 시간 {d.BusyPercent:F1}%   응답 시간 {d.ResponseMs:F1} ms   큐 길이 {d.QueueLength:F1}\r\n"
-                    + $"읽기 {RowBuilders.FormatRate(d.ReadBytesPerSec)}   쓰기 {RowBuilders.FormatRate(d.WriteBytesPerSec)}\r\n"
-                    + capacity + $"   드라이브 {letters}"
+                Strings.Fmt("활성 시간 {0:F1}%   응답 시간 {1:F1} ms   큐 길이 {2:F1}", d.BusyPercent, d.ResponseMs, d.QueueLength) + "\r\n"
+                    + Strings.Fmt("읽기 {0}   쓰기 {1}", RowBuilders.FormatRate(d.ReadBytesPerSec), RowBuilders.FormatRate(d.WriteBytesPerSec)) + "\r\n"
+                    + capacity + Strings.Fmt("   드라이브 {0}", letters)
                     + DiskHealthText(DiskHealthMonitor.Latest.GetValueOrDefault(d.Number)),
                 d.BusyPercent,
                 DiskColor,
@@ -447,9 +448,9 @@ internal sealed class PerformancePage : UserControl
             list.Add(new Entry(
                 "nic/" + n.Name,
                 n.Name,
-                $"보냄 {RowBuilders.FormatRate(n.SendBytesPerSec)}  받음 {RowBuilders.FormatRate(n.ReceiveBytesPerSec)}",
-                $"링크 속도 {n.LinkBitsPerSec / 1_000_000:F0} Mbps   사용률 {n.UtilizationPercent:F1}%\r\n"
-                    + $"보냄 {RowBuilders.FormatRate(n.SendBytesPerSec)}   받음 {RowBuilders.FormatRate(n.ReceiveBytesPerSec)}",
+                Strings.Fmt("보냄 {0}  받음 {1}", RowBuilders.FormatRate(n.SendBytesPerSec), RowBuilders.FormatRate(n.ReceiveBytesPerSec)),
+                Strings.Fmt("링크 속도 {0:F0} Mbps   사용률 {1:F1}%", n.LinkBitsPerSec / 1_000_000, n.UtilizationPercent) + "\r\n"
+                    + Strings.Fmt("보냄 {0}   받음 {1}", RowBuilders.FormatRate(n.SendBytesPerSec), RowBuilders.FormatRate(n.ReceiveBytesPerSec)),
                 n.UtilizationPercent,
                 NicColor,
                 Array.Empty<(string Label, double Value)>()));
@@ -466,9 +467,9 @@ internal sealed class PerformancePage : UserControl
             list.Add(new Entry(
                 "gpu/" + g.Name,
                 gpuDetails.GetValueOrDefault(g.Name)?.Name ?? g.Name,
-                $"{g.Utilization:F0}%   전용 메모리 {FormatSize(g.DedicatedUsed)}{dedicatedTotal}",
-                $"사용률 {g.Utilization:F1}% (엔진 중 최대)   전용 메모리 {FormatSize(g.DedicatedUsed)}{dedicatedTotal}\r\n"
-                    + $"공유 메모리 {FormatSize(g.SharedUsed)}   커밋 {FormatSize(g.TotalCommitted)}\r\n"
+                Strings.Fmt("{0:F0}%   전용 메모리 {1}{2}", g.Utilization, FormatSize(g.DedicatedUsed), dedicatedTotal),
+                Strings.Fmt("사용률 {0:F1}% (엔진 중 최대)   전용 메모리 {1}{2}", g.Utilization, FormatSize(g.DedicatedUsed), dedicatedTotal) + "\r\n"
+                    + Strings.Fmt("공유 메모리 {0}   커밋 {1}", FormatSize(g.SharedUsed), FormatSize(g.TotalCommitted)) + "\r\n"
                     + string.Join("   ", engines.Take(4).Select(e => $"{e.Label} {e.Value:F0}%")),
                 g.Utilization,
                 GpuColor,
@@ -483,7 +484,7 @@ internal sealed class PerformancePage : UserControl
     private static string Uptime()
     {
         var span = TimeSpan.FromMilliseconds(Environment.TickCount64);
-        return $"{span.Days}일 {span:hh\\:mm\\:ss}";
+        return Strings.Fmt("{0}일 {1:hh\\:mm\\:ss}", span.Days, span);
     }
 
     private static void Push(Dictionary<string, List<double>> map, string key, double value)
