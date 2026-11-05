@@ -644,7 +644,7 @@ internal static class SelfTest
 
             // ETW 교정(관리자 권한 없이): 루프백 TCP 보내기·받기 각 300KB, UDP 32KB 데이터그램 세 개.
             // 이 프로세스의 누적 바이트가 기대값과 3% 안에서 맞아야 한다(TCP 600KB + UDP 96KB).
-            using (var etw = new EtwMonitor())
+            using (var etw = new EtwMonitor("TaskMonitor-Etw-SelfTest"))
             {
                 etw.Start();
                 Thread.Sleep(500);
@@ -737,7 +737,13 @@ internal static class SelfTest
             Check("안전한 파일 쓰기(바꿔 끼우기, 깨진 파일 보존)", written && setAside, $"쓰기 {written}, 옮기기 {setAside}");
 
             // Windows 시작 시 실행: 켜고 끄면 HKCU Run 값이 생기고 지워진다. 사용자의 원래 상태로 되돌려 둔다.
-            bool autoStartBefore = AutoStart.IsEnabled();
+            // 원래 값을 그대로 되돌린다. Set(true)로 되돌리면 이 검증을 돌린 exe 경로로 바뀐다.
+            object? autoStartBefore;
+            using (var run = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(StartupItems.RunPath))
+            {
+                autoStartBefore = run?.GetValue("TaskMonitor", null, Microsoft.Win32.RegistryValueOptions.DoNotExpandEnvironmentNames);
+            }
+
             try
             {
                 AutoStart.Set(true);
@@ -748,7 +754,12 @@ internal static class SelfTest
             }
             finally
             {
-                AutoStart.Set(autoStartBefore);
+                AutoStart.Set(false);
+                if (autoStartBefore is not null)
+                {
+                    using var run = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(StartupItems.RunPath);
+                    run.SetValue("TaskMonitor", autoStartBefore);
+                }
             }
 
             // 아주 작은 표(최소화·트레이 시작): 스크롤바보다 좁아도 예외가 나지 않아야 한다(예전에는 LargeChange 음수로 죽었다).

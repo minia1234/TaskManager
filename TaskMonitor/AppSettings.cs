@@ -42,14 +42,22 @@ internal sealed class AppSettings
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // 잠겨서 못 읽으면 기본값으로 시작한다(파일은 그대로 둔다).
+            // 잠겨서 못 읽으면 기본값으로 시작하고, 이번 실행은 저장하지 않는다(사용자 설정을 기본값으로 덮어쓰지 않게).
+            return new AppSettings { _saveDisabled = true };
         }
 
         return new AppSettings();
     }
 
+    private bool _saveDisabled;
+
     public void Save()
     {
+        if (_saveDisabled)
+        {
+            return;
+        }
+
         try
         {
             SafeFile.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));

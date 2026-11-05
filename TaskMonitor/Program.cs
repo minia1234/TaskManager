@@ -20,7 +20,26 @@ internal static class Program
         }
 
         // 한 번에 하나만 실행한다. 두 번째 실행은 이미 떠 있는 창을 앞으로 불러오고 끝난다(기록 파일을 두 프로세스가 덮어쓰지 않게).
-        using var activate = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\TaskMonitor.Activate", out bool first);
+        EventWaitHandle activate;
+        bool first;
+        try
+        {
+            activate = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\TaskMonitor.Activate", out first);
+            // 관리자 권한으로 다시 실행한 경우 이전 창이 닫히며 이벤트를 놓을 때까지 잠깐 기다린다.
+            for (int i = 0; !first && args.Contains("--restarted") && i < 50; i++)
+            {
+                activate.Dispose();
+                Thread.Sleep(100);
+                activate = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\TaskMonitor.Activate", out first);
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // 관리자 권한 인스턴스가 만든 이벤트는 일반 권한으로 열 수 없다. 이미 실행 중이므로 끝낸다.
+            return 0;
+        }
+
+        using var _ = activate;
         if (!first)
         {
             // 사용자가 방금 실행한 이 프로세스가 앞 창 권한을 가지고 있으니, 이미 떠 있는 창이 앞으로 올 수 있게 넘겨 준다.

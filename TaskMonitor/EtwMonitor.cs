@@ -46,6 +46,13 @@ internal static class EtwLatest
 // Performance Log Users 소속 일반 계정으로 열린다. 세션을 열지 못하면 Status에 이유가 남고 값은 비어 있다.
 internal sealed class EtwMonitor : IDisposable
 {
+    // 고정 이름: 비정상 종료로 남은 세션을 다음 실행이 이어받아 정리한다(PID를 붙이면 재부팅 전까지 쌓인다).
+    // ETW 세션 이름은 시스템 전체에서 하나라 같은 이름으로 열면 남의 세션을 끊는다. 그래서 Windows 로그온 세션마다, 자체 검증은 따로 쓴다.
+    private readonly string _sessionName;
+
+    public EtwMonitor(string? sessionName = null) =>
+        _sessionName = sessionName ?? $"TaskMonitor-Etw-{System.Diagnostics.Process.GetCurrentProcess().SessionId}";
+
     private const int DxgiPresentStart = 42;
     private const int AfdSend = 1003;
     private const int AfdReceive = 1004;
@@ -76,9 +83,7 @@ internal sealed class EtwMonitor : IDisposable
 
         try
         {
-            // 고정 이름: 비정상 종료로 남은 세션을 다음 실행이 이어받아 정리한다(PID를 붙이면 재부팅 전까지 쌓인다).
-            // 한 번에 한 인스턴스만 실행되므로(Program) 이름이 겹칠 다른 소유자는 없다.
-            var session = new TraceEventSession("TaskMonitor-Etw") { StopOnDispose = true };
+            var session = new TraceEventSession(_sessionName) { StopOnDispose = true };
             _session = session;
             // 쓰는 이벤트 ID만 켠다. 제공자 전체를 켜면 프레임·패킷마다 수십 개가 와서 파싱 비용이 CPU의 대부분을 차지한다.
             Enable(session, "Microsoft-Windows-DXGI", DxgiPresentStart);

@@ -29,7 +29,7 @@ internal static class SafeFile
         {
             File.Move(path, path + ".bad", overwrite: true);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // 옮기지 못하면 그대로 둔다. 다음 저장은 임시 파일을 거치므로 원본을 망치지 않는다.
         }

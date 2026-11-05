@@ -41,8 +41,27 @@ internal sealed class AppHistory
             if (File.Exists(FilePath))
             {
                 _data = JsonSerializer.Deserialize<Saved>(File.ReadAllText(FilePath)) ?? new Saved();
-                // 역직렬화한 사전은 대소문자를 구분한다. 경로 대소문자만 다른 같은 exe가 두 줄이 되지 않게 되돌린다.
-                _data.Apps = new Dictionary<string, Entry>(_data.Apps, StringComparer.OrdinalIgnoreCase);
+                // 역직렬화한 사전은 대소문자를 구분한다. 예전 버전이 경로 대소문자만 다르게 따로 쌓은 줄은 합친다.
+                var apps = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (path, entry) in _data.Apps ?? new())
+                {
+                    if (entry is null)
+                    {
+                        continue;
+                    }
+
+                    if (apps.TryGetValue(path, out var same))
+                    {
+                        same.CpuSeconds += entry.CpuSeconds;
+                        same.IoBytes += entry.IoBytes;
+                    }
+                    else
+                    {
+                        apps[path] = entry;
+                    }
+                }
+
+                _data.Apps = apps;
             }
         }
         catch (JsonException)

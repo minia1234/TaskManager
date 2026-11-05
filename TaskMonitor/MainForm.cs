@@ -276,9 +276,16 @@ internal sealed class MainForm : Form
             StartWatchdog();
             _activateWait = ThreadPool.RegisterWaitForSingleObject(_activate, (_, _) =>
             {
-                if (!_closing && IsHandleCreated)
+                try
                 {
-                    BeginInvoke(RestoreFromTray);
+                    if (!_closing && IsHandleCreated)
+                    {
+                        BeginInvoke(RestoreFromTray);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // 확인과 BeginInvoke 사이에 창이 닫혔다. 스레드 풀 예외는 프로세스를 끝내므로 삼킨다.
                 }
             }, null, Timeout.Infinite, executeOnlyOnce: false);
         };
@@ -441,7 +448,19 @@ internal sealed class MainForm : Form
         var autoStart = Item("Windows 시작 시 실행", () => { });
         autoStart.CheckOnClick = true;
         autoStart.Checked = AutoStart.IsEnabled();
-        autoStart.Click += (_, _) => AutoStart.Set(autoStart.Checked);
+        autoStart.Click += (_, _) =>
+        {
+            try
+            {
+                AutoStart.Set(autoStart.Checked);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+            {
+                MessageBox.Show(this, ex.Message, Strings.Localize("Windows 시작 시 실행"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+
+            autoStart.Checked = AutoStart.IsEnabled();
+        };
         options.DropDownItems.Add(autoStart);
         options.DropDownItems.Add(new ToolStripSeparator());
 
@@ -646,6 +665,7 @@ internal sealed class MainForm : Form
         {
             UseShellExecute = true,
             Verb = "runas",
+            Arguments = "--restarted",
         };
         try
         {
@@ -661,7 +681,7 @@ internal sealed class MainForm : Form
             return;
         }
 
-        Close();
+        ExitApp();
     }
 
     // 언어는 컨트롤을 만들 때 문구를 고르므로 다음 실행부터 적용된다.
