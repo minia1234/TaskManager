@@ -31,7 +31,7 @@ internal static class AfterburnerSensors
             uint headerSize = view.ReadUInt32(8);
             uint count = view.ReadUInt32(12);
             uint entrySize = view.ReadUInt32(16);
-            if (entrySize < ValueOffset + 4 || count > 4096)
+            if (entrySize < ValueOffset + 4 || count > 4096 || headerSize < 20 || headerSize + (long)count * entrySize > view.Capacity)
             {
                 return null;
             }

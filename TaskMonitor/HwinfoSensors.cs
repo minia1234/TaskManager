@@ -42,7 +42,7 @@ internal static class HwinfoSensors
             uint readingOffset = view.ReadUInt32(HeaderReadingOffset);
             uint readingSize = view.ReadUInt32(HeaderReadingSize);
             uint readingCount = view.ReadUInt32(HeaderReadingCount);
-            if (readingSize < ReadingValueOffset + 8 || readingCount > 4096)
+            if (readingSize < ReadingValueOffset + 8 || readingCount > 4096 || readingOffset + (long)readingCount * readingSize > view.Capacity)
             {
                 return readings;
             }

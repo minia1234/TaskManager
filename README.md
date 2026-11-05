@@ -25,7 +25,7 @@
 |---|---|
 | 프로세스별 네트워크, FPS | 계정이 `Performance Log Users` 그룹에 속하거나 관리자 권한으로 실행. 조건이 안 맞으면 상태 바에 안내가 나오고 값은 "-"입니다. |
 | SATA·USB 디스크의 SMART | 관리자 권한(파일 > 관리자 권한으로 다시 실행). NVMe는 권한 없이 읽습니다. |
-| CPU 온도 | MSI Afterburner 실행 중(설정 없이 읽음), 또는 HWiNFO 실행 중이고 "Shared Memory Support" 켬. Windows는 드라이버 없이 CPU 온도를 내주지 않아서 이 도구들이 읽은 값을 빌려 씁니다. |
+| CPU 온도 | MSI Afterburner 실행 중이고 모니터링 항목에서 "CPU temperature"가 켜져 있음, 또는 HWiNFO 실행 중이고 "Shared Memory Support" 켬. Windows는 드라이버 없이 CPU 온도를 내주지 않아서 이 도구들이 읽은 값을 빌려 씁니다. |
 | 팬 속도(메인보드) | HWiNFO 실행 중, "Shared Memory Support" 켬. |
 | GPU 상세 | NVIDIA 드라이버(NVML). AMD GPU는 베타 지원입니다. |
 

@@ -861,6 +861,23 @@ internal static class SelfTest
                 WriteEntry(3, 63.25f, 0x80);
                 double? afterburnerTemp = AfterburnerSensors.CpuTemperatureC(mahmName);
                 Check("Afterburner 공유 메모리 해석(CPU 온도, 합성 메모리)", afterburnerTemp == 63.25, $"CPU {afterburnerTemp?.ToString("F2") ?? "-"}°C");
+
+                // 칸 수가 실제 크기보다 크게 적힌 블록은 예외 없이 null이어야 한다(예외는 그 샘플의 활동 기록 전체를 건너뛰게 한다).
+                mahmView.Write(12, 400u);
+                double? oversized = -1;
+                try
+                {
+                    oversized = AfterburnerSensors.CpuTemperatureC(mahmName);
+                }
+                catch (Exception ex)
+                {
+                    Check("Afterburner 잘못된 헤더(칸 수 과대)", false, ex.GetType().Name);
+                }
+
+                if (oversized != -1)
+                {
+                    Check("Afterburner 잘못된 헤더(칸 수 과대)", oversized is null, oversized is null ? "무시함" : $"{oversized}");
+                }
             }
 
             double? liveCpuTemp = AfterburnerSensors.CpuTemperatureC();

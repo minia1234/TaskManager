@@ -134,7 +134,7 @@ internal sealed class DataWorker : IDisposable
 
     public ActivityLog Activity => _activity;
 
-    // CPU 온도(HWiNFO 공유 메모리). HWiNFO가 꺼져 있으면 null.
+    // CPU 온도(HWiNFO, 없으면 Afterburner 공유 메모리). 둘 다 꺼져 있으면 null.
     public double? CpuTemperatureC => _cpuTemp;
 
     // 팬 회전수(RPM, 최대 세 개). HWiNFO가 꺼져 있으면 비어 있다.
