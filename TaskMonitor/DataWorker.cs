@@ -301,7 +301,7 @@ internal sealed class DataWorker : IDisposable
         _etw.Prune(snap.Processes.Select(p => p.Pid).ToHashSet());
         var frames = _etw.Frames(now);
         var rates = _etw.Rates(now);
-        EtwLatest.Publish(frames, rates, _etw.Totals(), _etw.Status);
+        EtwLatest.Publish(frames, rates, _etw.Totals(), _etw.State, _etw.Status);
         var games = _games.Update(now, snap, perf, gpus, frames, Win32.ForegroundWindowState());
         var recorded = new List<ActivityEvent>(events.Count + alerts.Count + games.Count);
         recorded.AddRange(events);

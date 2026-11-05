@@ -818,10 +818,14 @@ internal sealed class MainForm : Form
             _lastPerf = frame.Perf;
             UiStep("화면 반영: 성능", () => _performance.Update(snap, frame.Perf));
             string status = Strings.Fmt("마지막 갱신 {0}   |   프로세스 {1}개", DateTime.Now.ToString("HH:mm:ss"), snap.ProcessCount);
-            if (EtwLatest.Status != "실행 중" && EtwLatest.Status != "시작 전")
+            // 네트워크·FPS 열이 "-"인 이유를 알려 준다. 세션을 못 열었으면 대부분 관리자 권한으로 다시 실행하면 풀린다(파일 메뉴).
+            if (EtwLatest.State == EtwState.OpenFailed)
             {
-                // 네트워크·FPS 열이 "-"인 이유를 알려 준다. 대부분 관리자 권한으로 다시 실행하면 풀린다(파일 메뉴).
                 status += $"   |   {Strings.Localize("네트워크·FPS 측정 꺼짐(관리자 권한으로 다시 실행)")}";
+            }
+            else if (EtwLatest.State == EtwState.Stopped)
+            {
+                status += $"   |   {Strings.Localize("네트워크·FPS 측정 중단됨(다시 시작하면 복구)")}";
             }
             if (_worker?.CpuTemperatureC is { } cpuTemp)
             {

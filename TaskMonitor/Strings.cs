@@ -120,6 +120,7 @@ internal static class Strings
         ["측정 시작"] = "Since",
         ["마지막 갱신 {0}   |   프로세스 {1}개"] = "Last update {0}   |   {1} processes",
         ["네트워크·FPS 측정 꺼짐(관리자 권한으로 다시 실행)"] = "Network and FPS off (run as administrator)",
+        ["네트워크·FPS 측정 중단됨(다시 시작하면 복구)"] = "Network and FPS stopped (restart TaskMonitor to recover)",
         ["오류"] = "Error",
         ["CPU를 누가 쓰는지 찾는 Windows 작업 관리자"] = "A Windows task manager that finds what is using your CPU",
         ["기록 위치"] = "Records folder",

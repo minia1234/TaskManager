@@ -738,10 +738,14 @@ internal static class SelfTest
 
             // Windows 시작 시 실행: 켜고 끄면 HKCU Run 값이 생기고 지워진다. 사용자의 원래 상태로 되돌려 둔다.
             // 원래 값을 그대로 되돌린다. Set(true)로 되돌리면 이 검증을 돌린 exe 경로로 바뀐다.
-            object? autoStartBefore;
+            object? autoStartBefore, approvedBefore;
             using (var run = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(StartupItems.RunPath))
             {
                 autoStartBefore = run?.GetValue("TaskMonitor", null, Microsoft.Win32.RegistryValueOptions.DoNotExpandEnvironmentNames);
+            }
+            using (var approved = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(StartupItems.ApprovedPath))
+            {
+                approvedBefore = approved?.GetValue("TaskMonitor");
             }
 
             try
@@ -750,11 +754,30 @@ internal static class SelfTest
                 bool on = AutoStart.IsEnabled();
                 AutoStart.Set(false);
                 bool off = !AutoStart.IsEnabled();
-                Check("Windows 시작 시 실행 켜기·끄기", on && off, $"켜짐 {on}, 꺼짐 {off}");
+                // Windows 설정에서 끈 상태(StartupApproved 0x03)는 꺼짐으로 보이고, 다시 켜면 풀린다.
+                AutoStart.Set(true);
+                using (var approved = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(StartupItems.ApprovedPath))
+                {
+                    approved.SetValue("TaskMonitor", new byte[12] { 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, Microsoft.Win32.RegistryValueKind.Binary);
+                }
+
+                bool disabledShownOff = !AutoStart.IsEnabled();
+                AutoStart.Set(true);
+                bool reEnabled = AutoStart.IsEnabled();
+                Check("Windows 시작 시 실행 켜기·끄기", on && off && disabledShownOff && reEnabled, $"켜짐 {on}, 꺼짐 {off}, Windows에서 끔 반영 {disabledShownOff}, 다시 켬 {reEnabled}");
             }
             finally
             {
                 AutoStart.Set(false);
+                using (var approved = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(StartupItems.ApprovedPath))
+                {
+                    approved.DeleteValue("TaskMonitor", throwOnMissingValue: false);
+                    if (approvedBefore is not null)
+                    {
+                        approved.SetValue("TaskMonitor", approvedBefore, Microsoft.Win32.RegistryValueKind.Binary);
+                    }
+                }
+
                 if (autoStartBefore is not null)
                 {
                     using var run = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(StartupItems.RunPath);

@@ -16,7 +16,9 @@ internal static class AutoStart
     public static bool IsEnabled()
     {
         using var run = Registry.CurrentUser.OpenSubKey(StartupItems.RunPath);
-        return run?.GetValue(ValueName) is string;
+        using var approved = Registry.CurrentUser.OpenSubKey(StartupItems.ApprovedPath);
+        // Windows 설정이나 시작 프로그램 페이지에서 끈 항목은 Run 값이 있어도 실행되지 않는다.
+        return run?.GetValue(ValueName) is string && StartupItems.IsEnabled(approved?.GetValue(ValueName) as byte[]);
     }
 
     public static void Set(bool enabled)
@@ -25,6 +27,8 @@ internal static class AutoStart
         if (enabled)
         {
             run.SetValue(ValueName, $"\"{Environment.ProcessPath}\" --tray");
+            using var approved = Registry.CurrentUser.OpenSubKey(StartupItems.ApprovedPath, writable: true);
+            approved?.DeleteValue(ValueName, throwOnMissingValue: false);
         }
         else
         {
@@ -36,7 +40,7 @@ internal static class AutoStart
 internal static class StartupItems
 {
     internal const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ApprovedPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+    internal const string ApprovedPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 
     internal static List<StartupRow> Enumerate()
     {
@@ -79,7 +83,7 @@ internal static class StartupItems
     }
 
     // 값이 없으면 사용으로 본다. 첫 바이트의 가장 낮은 비트가 1이면 사용 안 함이다(0x03).
-    private static bool IsEnabled(byte[]? value) => value is null || value.Length == 0 || (value[0] & 0x01) == 0;
+    internal static bool IsEnabled(byte[]? value) => value is null || value.Length == 0 || (value[0] & 0x01) == 0;
 
     // 명령에서 실행 파일 경로를 뽑는다. 따옴표가 있으면 따옴표 안, 없으면 .exe 까지.
     internal static string ExtractPath(string command)

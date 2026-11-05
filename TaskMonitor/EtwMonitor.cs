@@ -13,12 +13,15 @@ internal sealed record NetTotals(long SentBytes, long ReceivedBytes);
 internal sealed record NetRate(double SentBytesPerSec, double ReceivedBytesPerSec);
 
 // 화면이 쓰는 최신 값. 매 샘플링마다 EtwMonitor가 채운다(RowBuilders와 분석 창이 읽는다).
+internal enum EtwState { Starting, Running, OpenFailed, Stopped }
+
 internal static class EtwLatest
 {
     private static IReadOnlyDictionary<int, FrameStats> _frames = new Dictionary<int, FrameStats>();
     private static IReadOnlyDictionary<int, NetRate> _rates = new Dictionary<int, NetRate>();
     private static IReadOnlyDictionary<int, NetTotals> _totals = new Dictionary<int, NetTotals>();
     private static string _status = "시작 전";
+    private static int _state;
 
     public static IReadOnlyDictionary<int, FrameStats> Frames => Volatile.Read(ref _frames);
     public static IReadOnlyDictionary<int, NetRate> Rates => Volatile.Read(ref _rates);
@@ -26,14 +29,16 @@ internal static class EtwLatest
 
     // ETW 세션 상태(실행 중, 또는 열지 못한 이유). 측정이 비어 있을 때 이유를 보여 주려고 함께 싣는다.
     public static string Status => Volatile.Read(ref _status);
+    public static EtwState State => (EtwState)Volatile.Read(ref _state);
 
     public static void Publish(IReadOnlyDictionary<int, FrameStats> frames, IReadOnlyDictionary<int, NetRate> rates,
-        IReadOnlyDictionary<int, NetTotals> totals, string status)
+        IReadOnlyDictionary<int, NetTotals> totals, EtwState state, string status)
     {
         Volatile.Write(ref _frames, frames);
         Volatile.Write(ref _rates, rates);
         Volatile.Write(ref _totals, totals);
         Volatile.Write(ref _status, status);
+        Volatile.Write(ref _state, (int)state);
     }
 }
 
@@ -71,8 +76,10 @@ internal sealed class EtwMonitor : IDisposable
     private TraceEventSession? _session;
     private Thread? _thread;
     private int _started;
+    private volatile bool _disposed;
 
     public string Status { get; private set; } = "시작 전";
+    public EtwState State { get; private set; }
 
     public void Start()
     {
@@ -95,11 +102,21 @@ internal sealed class EtwMonitor : IDisposable
                 try
                 {
                     session.Source.Process();
+                    // 예외 없이 끝나면 누군가 세션을 멈춘 것이다. 실행 중으로 남겨 두면 빈 값의 이유가 안 보인다.
+                    if (!_disposed)
+                    {
+                        lock (_gate)
+                        {
+                            State = EtwState.Stopped;
+                            Status = "ETW 세션이 중지됨";
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
                     lock (_gate)
                     {
+                        State = EtwState.Stopped;
                         Status = "ETW 처리 중단: " + ex.Message;
                     }
                 }
@@ -109,10 +126,12 @@ internal sealed class EtwMonitor : IDisposable
                 Name = "TaskMonitor ETW",
             };
             _thread.Start();
+            State = EtwState.Running;
             Status = "실행 중";
         }
         catch (Exception ex)
         {
+            State = EtwState.OpenFailed;
             Status = "ETW 세션을 열지 못함: " + ex.Message;
         }
     }
@@ -310,6 +329,7 @@ internal sealed class EtwMonitor : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         var thread = _thread;
         _session?.Dispose();
         thread?.Join(2000);
