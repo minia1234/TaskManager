@@ -113,7 +113,7 @@ internal static class CauseReport
         sb.AppendLine();
         sb.AppendLine(Strings.Localize("- 프레임 속도: 프레젠트(DXGI)를 보내는 프로그램만 잰다. 프레젠트를 쓰지 않는 프로그램은 FPS가 없다."));
         sb.AppendLine(Strings.Localize("- 네트워크 바이트: TCP·UDP 보내기와 받기를 프로세스별로 잰다(ETW, 관리자 권한 없음). 연결별 세부 통계는 제공하지 않는다."));
-        sb.AppendLine(Strings.Localize("- CPU 온도와 팬 속도: HWiNFO가 실행 중이고 공유 메모리 지원이 켜져 있을 때만 읽는다."));
+        sb.AppendLine(Strings.Localize("- CPU 온도: MSI Afterburner나 HWiNFO(공유 메모리 지원 켬)가 실행 중일 때만 읽는다. 메인보드 팬 속도는 HWiNFO일 때만 읽는다."));
         sb.AppendLine(Strings.Localize("- 샘플 주기(기본 1초) 사이에 시작하고 끝난 짧은 프로세스는 기록되지 않는다."));
         return sb.ToString();
     }

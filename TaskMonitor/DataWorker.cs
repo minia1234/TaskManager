@@ -293,7 +293,7 @@ internal sealed class DataWorker : IDisposable
 
         var events = _tracker.Update(snap.Processes, now);
         var sensors = HwinfoSensors.Read();
-        var cpuTemp = HwinfoSensors.CpuTemperatureC(sensors);
+        var cpuTemp = HwinfoSensors.CpuTemperatureC(sensors) ?? AfterburnerSensors.CpuTemperatureC();
         _cpuTemp = cpuTemp;
         _fanRpm = sensors.Where(r => r.Kind == HwinfoSensors.KindFan && r.Unit.Contains("RPM", StringComparison.OrdinalIgnoreCase))
             .Select(r => r.Value).Take(3).ToList();

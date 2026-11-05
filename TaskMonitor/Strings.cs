@@ -261,7 +261,7 @@ internal static class Strings
         ["## 프로세스 활동"] = "## Process activity",
         ["## 해석"] = "## Interpretation",
         ["- {0}: {1}회"] = "- {0}: {1} times",
-        ["- CPU 온도와 팬 속도: HWiNFO가 실행 중이고 공유 메모리 지원이 켜져 있을 때만 읽는다."] = "- CPU temperature and fan speed: read only while HWiNFO runs with Shared Memory Support on.",
+        ["- CPU 온도: MSI Afterburner나 HWiNFO(공유 메모리 지원 켬)가 실행 중일 때만 읽는다. 메인보드 팬 속도는 HWiNFO일 때만 읽는다."] = "- CPU temperature: read only while MSI Afterburner or HWiNFO (Shared Memory Support on) runs. Motherboard fan speed needs HWiNFO.",
         ["- 네트워크 바이트: TCP·UDP 보내기와 받기를 프로세스별로 잰다(ETW, 관리자 권한 없음). 연결별 세부 통계는 제공하지 않는다."] = "- Network bytes: TCP/UDP sent and received per process (ETW, no administrator rights). No per-connection statistics.",
         ["- 분석 기간: {0:yyyy-MM-dd HH:mm} ~ {1:HH:mm} (최근 1시간)"] = "- Analysis period: {0:yyyy-MM-dd HH:mm} ~ {1:HH:mm} (last hour)",
         ["- 비교 기간: {0:yyyy-MM-dd HH:mm} ~ {1:HH:mm} (그 전 1시간)"] = "- Comparison period: {0:yyyy-MM-dd HH:mm} ~ {1:HH:mm} (the hour before)",

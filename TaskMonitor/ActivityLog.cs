@@ -175,7 +175,7 @@ internal sealed class AlertRules
     {
         var alerts = new List<ActivityEvent>();
 
-        // CPU 온도: HWiNFO 공유 메모리로 읽을 수 있을 때만 본다(없으면 경고도 없다).
+        // CPU 온도: HWiNFO나 Afterburner 공유 메모리로 읽을 수 있을 때만 본다(없으면 경고도 없다).
         if (cpuTempC is { } cpuTemp)
         {
             Edge(alerts, now, "cpu-temp", cpuTemp, CpuTempLimitC, "CPU 과열", Strings.Fmt("CPU {0:F0}°C (기준 {1}°C)", cpuTemp, CpuTempLimitC));

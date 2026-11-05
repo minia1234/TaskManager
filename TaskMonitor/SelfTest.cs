@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -837,6 +837,35 @@ internal static class SelfTest
                 Check("HWiNFO 공유 메모리 해석(CPU 온도·팬, 합성 메모리)", cpuTempRead == 67.5 && fanOk,
                     $"CPU {cpuTempRead?.ToString("F1") ?? "-"}°C, 팬 칸 {(fanOk ? "있음" : "없음")}");
             }
+
+            // MSI Afterburner 공유 메모리: GPU 칸은 건너뛰고, 값 없음(FLT_MAX)은 버리고, CPU 온도 칸 중 최고값을 고른다.
+            string mahmName = $"TaskMonitorSelfTest_MAHM_{Environment.ProcessId}";
+            using (var mahm = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateNew(mahmName, 32 + 4 * 1324))
+            using (var mahmView = mahm.CreateViewAccessor())
+            {
+                mahmView.Write(0, 0x4D41484Du);
+                mahmView.Write(4, 0x20000u);
+                mahmView.Write(8, 32u);
+                mahmView.Write(12, 4u);
+                mahmView.Write(16, 1324u);
+                void WriteEntry(int index, float value, uint source)
+                {
+                    long at = 32 + index * 1324L;
+                    mahmView.Write(at + 1300, value);
+                    mahmView.Write(at + 1320, source);
+                }
+
+                WriteEntry(0, 88f, 0x0);
+                WriteEntry(1, 61.5f, 0x80);
+                WriteEntry(2, float.MaxValue, 0x80);
+                WriteEntry(3, 63.25f, 0x80);
+                double? afterburnerTemp = AfterburnerSensors.CpuTemperatureC(mahmName);
+                Check("Afterburner 공유 메모리 해석(CPU 온도, 합성 메모리)", afterburnerTemp == 63.25, $"CPU {afterburnerTemp?.ToString("F2") ?? "-"}°C");
+            }
+
+            double? liveCpuTemp = AfterburnerSensors.CpuTemperatureC();
+            Check("CPU 온도 실측(Afterburner 실행 중일 때)", liveCpuTemp is null or (> 10 and < 110),
+                liveCpuTemp is { } live ? $"{live:F1}°C" : "Afterburner 꺼짐(건너뜀)");
 
             var analysisSnap = sampler.Sample();
             string analysis = ProcessAnalysisText.Build(Environment.ProcessId, analysisSnap, null, activity);
