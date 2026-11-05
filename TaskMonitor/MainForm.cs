@@ -908,6 +908,12 @@ internal sealed class MainForm : Form
 
         double memory = _lastPerf is { Memory.Total: > 0 } p ? 100.0 * p.Memory.Used / p.Memory.Total : 0;
         _processes.SetBig("memory", $"{memory:F0}%", Theme.Fg);
+
+        // 작업 관리자처럼 가장 바쁜 디스크·GPU의 사용률을 보인다.
+        double disk = _lastPerf?.Disks.Select(d => d.BusyPercent).DefaultIfEmpty(0).Max() ?? 0;
+        _processes.SetBig("disk", $"{disk:F0}%", Theme.Fg);
+        double gpu = _lastPerf?.Gpus.Select(g => g.Utilization).DefaultIfEmpty(0).Max() ?? 0;
+        _processes.SetBig("gpu", $"{gpu:F0}%", Theme.Fg);
     }
 
     private void ApplyFilter()
