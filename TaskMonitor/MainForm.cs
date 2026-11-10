@@ -530,6 +530,7 @@ internal sealed class MainForm : Form
         var view = new ToolStripMenuItem("보기");
         view.DropDownItems.Add(Item("새로 고침", () => _worker?.RequestNow(), Keys.F5));
         view.DropDownItems.Add(Item("열 선택...", ChooseColumns));
+        view.DropDownItems.Add(Item("절전을 막는 프로그램...", ShowPowerRequests));
         view.DropDownItems.Add(new ToolStripSeparator());
         view.DropDownItems.Add(Item("모두 펼치기", () => _processes.ExpandAll(true)));
         view.DropDownItems.Add(Item("모두 접기", () => _processes.ExpandAll(false)));
@@ -1146,6 +1147,7 @@ internal sealed class MainForm : Form
         menu.Items.Add(Item("덤프 파일 만들기", () => DumpTarget(target)));
         menu.Items.Add(Item("파일 위치 열기", () => RunBackground("파일 위치 열기", () => Attempt(() => ProcessActions.OpenFileLocation(ProcessInfoCache.PathOf(first.Pid))))));
         menu.Items.Add(Item("온라인 검색", () => RunBackground("온라인 검색", () => Attempt(() => ProcessActions.SearchOnline(target.Name)))));
+        menu.Items.Add(Item("VirusTotal에서 확인", () => RunBackground("VirusTotal에서 확인", () => Attempt(() => ProcessActions.OpenVirusTotal(ProcessInfoCache.PathOf(first.Pid))))));
         menu.Items.Add(Item("속성", () => RunBackground("속성 열기", () => Attempt(() => ProcessActions.ShowProperties(ProcessInfoCache.PathOf(first.Pid))))));
         menu.Items.Add(Item("분석 창 열기", () => OpenAnalysis(first.Pid)));
         var exclude = Item("경고에서 제외", () => SetAlertExcluded(target.Name, !_settings.AlertExclusions.Contains(target.Name, StringComparer.OrdinalIgnoreCase)));
@@ -1167,6 +1169,16 @@ internal sealed class MainForm : Form
         menu.Items.Add(Item("시작", () => ServiceAction("서비스 시작", ServiceList.Start, service)));
         menu.Items.Add(Item("중지", () => ServiceAction("서비스 중지", ServiceList.Stop, service, confirm: true)));
         menu.Items.Add(Item("다시 시작", () => ServiceAction("서비스 다시 시작", ServiceList.Restart, service, confirm: true)));
+        var startType = new ToolStripMenuItem(Strings.Localize("시작 유형"));
+        uint? currentType = ServiceList.StartType(service.Name);
+        foreach (var (type, label) in new[] { (ServiceList.StartAuto, "자동"), (ServiceList.StartManual, "수동"), (ServiceList.StartDisabled, "사용 안 함") })
+        {
+            var item = Item(label, () => ServiceAction("시작 유형 변경", name => ServiceList.SetStartType(name, type), service, confirm: type == ServiceList.StartDisabled));
+            item.Checked = currentType == type;
+            startType.DropDownItems.Add(item);
+        }
+
+        menu.Items.Add(startType);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(Item("온라인 검색", () => RunBackground("온라인 검색", () => Attempt(() => ProcessActions.SearchOnline(
             service.DisplayName.Length > 0 ? service.DisplayName : service.Name)))));
@@ -1468,6 +1480,21 @@ internal sealed class MainForm : Form
         _settings.Save();
         _treeMenu.Checked = tree;
         _worker?.SetTree(tree);
+    }
+
+    private void ShowPowerRequests()
+    {
+        string? text = null;
+        RunBackground("절전을 막는 프로그램", () =>
+        {
+            text = ProcessActions.PowerRequests();
+            return null;
+        }, () =>
+        {
+            string note = IsElevated() ? "" : Strings.Localize("관리자 권한이 필요합니다. 파일 > 관리자 권한으로 다시 실행 후 다시 여세요.") + Environment.NewLine + Environment.NewLine;
+            string body = note + text;
+            new ProcessAnalysisForm(Strings.Localize("절전을 막는 프로그램"), () => body).Show(this);
+        });
     }
 
     // 프로세스 분석 창: 한 프로세스의 실행 정보와 자원, 연결, 최근 활동을 1초마다 새로 보여 준다.

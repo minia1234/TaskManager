@@ -107,6 +107,39 @@ internal static class ProcessActions
         }
     }
 
+    // 절전을 막는 요청(화면 켜 두기, 절전 막기 등). Windows의 powercfg /requests 결과를 그대로 보여 준다(관리자 권한 필요).
+    // 콘솔 프로그램 출력은 OEM 코드 페이지(한국어 Windows는 949)로 나온다.
+    internal static string PowerRequests()
+    {
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        var info = new ProcessStartInfo("powercfg.exe", "/requests")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = System.Text.Encoding.GetEncoding((int)Win32.GetOEMCP()),
+            StandardErrorEncoding = System.Text.Encoding.GetEncoding((int)Win32.GetOEMCP()),
+        };
+        using var process = Process.Start(info)!;
+        var error = process.StandardError.ReadToEndAsync();
+        string output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit(10000);
+        return (output + error.Result).Trim();
+    }
+
+    // VirusTotal은 같은 파일(SHA-256)을 누가 이미 검사했으면 결과 페이지를 보여 준다. 파일은 올리지 않고 해시만 주소에 넣는다.
+    internal static void OpenVirusTotal(string path)
+    {
+        string hash;
+        using (var stream = File.OpenRead(path))
+        {
+            hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream)).ToLowerInvariant();
+        }
+
+        Process.Start(new ProcessStartInfo($"https://www.virustotal.com/gui/file/{hash}") { UseShellExecute = true });
+    }
+
     // 자식 프로세스를 먼저 끝내고 대상을 끝낸다. 자식은 같은 PID의 부모보다 나중에 만들어진 것만 자식으로 본다(PID 재사용 방지).
     // 실패한 개수를 돌려준다.
     internal static int EndTree(ProcessUsage root, IReadOnlyList<ProcessUsage> all)

@@ -179,6 +179,50 @@ internal static class ServiceList
         throw new TimeoutException("서비스가 제한 시간 안에 멈추지 않았습니다.");
     }
 
+    // 시작 유형: 2 자동, 3 수동, 4 사용 안 함. 바꾸려면 보통 관리자 권한이 필요하다(실패하면 오류로 알린다).
+    internal const uint StartAuto = 2, StartManual = 3, StartDisabled = 4;
+
+    internal static uint? StartType(string name)
+    {
+        uint? type = null;
+        try
+        {
+            WithService(name, Win32.ServiceQueryConfig, svc =>
+            {
+                Win32.QueryServiceConfigW(svc, IntPtr.Zero, 0, out uint needed);
+                IntPtr buffer = Marshal.AllocHGlobal((int)needed);
+                try
+                {
+                    if (Win32.QueryServiceConfigW(svc, buffer, needed, out _))
+                    {
+                        type = (uint)Marshal.ReadInt32(buffer, 4); // QUERY_SERVICE_CONFIG.dwStartType
+                    }
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            });
+        }
+        catch (Win32Exception)
+        {
+            // 읽을 권한이 없으면 표시만 안 한다.
+        }
+
+        return type;
+    }
+
+    internal static void SetStartType(string name, uint startType)
+    {
+        WithService(name, Win32.ServiceChangeConfig, svc =>
+        {
+            if (!Win32.ChangeServiceConfigW(svc, Win32.ServiceNoChange, startType, Win32.ServiceNoChange, null, null, IntPtr.Zero, null, null, null, null))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+        });
+    }
+
     internal static void OpenServicesConsole()
     {
         Process.Start(new ProcessStartInfo("services.msc") { UseShellExecute = true });

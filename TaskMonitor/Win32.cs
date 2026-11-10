@@ -31,6 +31,9 @@ internal static class Win32
     internal const uint ServiceStart = 0x0010;
     internal const uint ServiceStop = 0x0020;
     internal const uint ServiceQueryStatus = 0x0004;
+    internal const uint ServiceQueryConfig = 0x0001;
+    internal const uint ServiceChangeConfig = 0x0002;
+    internal const uint ServiceNoChange = 0xFFFFFFFF;
     internal const uint ServiceWin32 = 0x30;
     internal const uint ServiceStateAll = 0x3;
 
@@ -90,6 +93,13 @@ internal static class Win32
 
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     internal static extern IntPtr OpenServiceW(IntPtr scManager, string name, uint access);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    internal static extern bool QueryServiceConfigW(IntPtr service, IntPtr config, uint size, out uint needed);
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    internal static extern bool ChangeServiceConfigW(IntPtr service, uint serviceType, uint startType, uint errorControl,
+        string? binaryPath, string? loadOrderGroup, IntPtr tagId, string? dependencies, string? startName, string? password, string? displayName);
 
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     internal static extern bool StartServiceW(IntPtr service, uint argc, IntPtr argv);
@@ -210,6 +220,9 @@ internal static class Win32
 
     [DllImport("ntdll.dll")]
     internal static extern int RtlNtStatusToDosError(int status);
+
+    [DllImport("kernel32.dll")]
+    internal static extern uint GetOEMCP();
 
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hwnd);

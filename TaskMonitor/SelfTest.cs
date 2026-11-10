@@ -237,6 +237,10 @@ internal static class SelfTest
         {
             var services = ServiceList.Enumerate();
             Check("서비스 열거", services.Count > 0, $"{services.Count}개, 실행 중 PID 있음: {services.Count(s => s.ProcessId > 0)}개");
+            string power = ProcessActions.PowerRequests();
+            Check("절전 요청 조회(powercfg 출력 해독)", power.Length > 0 && !power.Contains('�'), power.Split('\n')[0].Trim());
+            uint? scheduleType = ServiceList.StartType("Schedule");
+            Check("서비스 시작 유형 읽기(작업 스케줄러 = 자동)", scheduleType == ServiceList.StartAuto, $"{scheduleType}");
         }
         catch (Exception ex)
         {
