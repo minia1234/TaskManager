@@ -106,6 +106,7 @@ internal sealed class MainForm : Form
     private ToolStripMenuItem? _updateItem;      // 새 버전이 있으면 메뉴 줄 오른쪽에 뜬다
     private bool _updateStaged;                  // 새 exe를 이미 놓았다. 다시 받지 않는다
     private bool _updateBalloon;                 // 마지막 트레이 알림이 업데이트 알림이다
+    private bool _netColumnChecked;
 
     private int _currentPage = PageProcesses;
     private Snapshot? _last;
@@ -930,6 +931,17 @@ internal sealed class MainForm : Form
             else if (EtwLatest.State == EtwState.Stopped)
             {
                 status += $"   |   {Strings.Localize("네트워크·FPS 측정 중단됨(다시 시작하면 복구)")}";
+            }
+            else if (EtwLatest.State == EtwState.Running && !_netColumnChecked)
+            {
+                // 측정이 되는 PC에서는 네트워크 열을 기본으로 보인다. 사용자가 열을 직접 고른 적이 있으면 건드리지 않는다.
+                _netColumnChecked = true;
+                var visible = _processes.VisibleColumns.ToList();
+                if (!_settings.Columns.ContainsKey("processes") && !visible.Contains("net"))
+                {
+                    visible.Insert(visible.Contains("gpu") ? visible.IndexOf("gpu") + 1 : visible.Count, "net");
+                    _processes.SetColumns(visible);
+                }
             }
             if (_worker?.CpuTemperatureC is { } cpuTemp)
             {

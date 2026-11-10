@@ -450,7 +450,8 @@ internal sealed class PerformancePage : UserControl
                 n.Name,
                 Strings.Fmt("보냄 {0}  받음 {1}", RowBuilders.FormatRate(n.SendBytesPerSec), RowBuilders.FormatRate(n.ReceiveBytesPerSec)),
                 Strings.Fmt("링크 속도 {0:F0} Mbps   사용률 {1:F1}%", n.LinkBitsPerSec / 1_000_000, n.UtilizationPercent) + "\r\n"
-                    + Strings.Fmt("보냄 {0}   받음 {1}", RowBuilders.FormatRate(n.SendBytesPerSec), RowBuilders.FormatRate(n.ReceiveBytesPerSec)),
+                    + Strings.Fmt("보냄 {0}   받음 {1}", RowBuilders.FormatRate(n.SendBytesPerSec), RowBuilders.FormatRate(n.ReceiveBytesPerSec))
+                    + TopNetworkPrograms(snap),
                 n.UtilizationPercent,
                 NicColor,
                 Array.Empty<(string Label, double Value)>()));
@@ -479,6 +480,26 @@ internal sealed class PerformancePage : UserControl
         }
 
         return list;
+    }
+
+    // ETW의 프로세스별 속도는 어댑터를 가리지 않으므로 모든 어댑터 합계로 보여 준다. 같은 이름은 합친다.
+    private static string TopNetworkPrograms(Snapshot snap)
+    {
+        if (EtwLatest.State != EtwState.Running)
+        {
+            return "\r\n\r\n" + Strings.Localize("프로그램별 사용량은 네트워크 측정(ETW)이 켜져 있을 때 보입니다.");
+        }
+
+        var rates = EtwLatest.Rates;
+        var top = snap.Processes
+            .Where(p => rates.ContainsKey(p.Pid))
+            .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (Name: g.Key, Sent: g.Sum(p => rates[p.Pid].SentBytesPerSec), Received: g.Sum(p => rates[p.Pid].ReceivedBytesPerSec)))
+            .Where(t => t.Sent + t.Received > 0)
+            .OrderByDescending(t => t.Sent + t.Received)
+            .Take(5)
+            .Select(t => "\r\n  " + Strings.Fmt("{0}   받음 {1}  보냄 {2}", t.Name, RowBuilders.FormatRate(t.Received), RowBuilders.FormatRate(t.Sent)));
+        return "\r\n\r\n" + Strings.Localize("많이 쓰는 프로그램 (모든 어댑터)") + string.Concat(top);
     }
 
     private static string Uptime()

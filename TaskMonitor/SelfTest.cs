@@ -603,6 +603,20 @@ internal static class SelfTest
             Check("프로세스 CPU 급증 경고(20초 지속, 한 번만)", h0.Count == 0 && h1.Count == 1 && h1[0].Subject == "프로세스 CPU 급증" && h2.Count == 0,
                 $"0초 {h0.Count}, 21초 {h1.Count}, 22초 {h2.Count}");
 
+            // 프로세스 네트워크: 보냄+받음 10MB/s, 보냄 2MB/s가 30초 이어지면 각각 한 번 울린다. ETW 값이 없으면(null) 보지 않는다.
+            var netRules = new AlertRules();
+            var idle = hogSnap with { Processes = new[] { hog with { CpuPercent = 1 } } };
+            var upload = new Dictionary<int, NetRate> { [400] = new NetRate(3 * 1024 * 1024, 9 * 1024 * 1024) };
+            var n0 = netRules.Evaluate(hogT0, idle, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks, null, upload);
+            var n1 = netRules.Evaluate(hogT0.AddSeconds(31), idle, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks, null, upload);
+            var n2 = netRules.Evaluate(hogT0.AddSeconds(32), idle, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks, null, upload);
+            var noEtw = new AlertRules();
+            noEtw.Evaluate(hogT0, idle, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks);
+            var n3 = noEtw.Evaluate(hogT0.AddSeconds(31), idle, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks);
+            Check("프로세스 네트워크·업로드 경고(30초 지속, 한 번만)", n0.Count == 0 && n2.Count == 0 && n3.Count == 0
+                && n1.Select(e => e.Subject).Order().SequenceEqual(new[] { "프로세스 네트워크 과다", "프로세스 업로드 지속" }.Order()),
+                $"0초 {n0.Count}, 31초 {string.Join("/", n1.Select(e => e.Detail))}, 32초 {n2.Count}");
+
             // 게임 세션: 전체 화면 + GPU 3D 30% 이상이 10초 이어지면 시작하고, 10초 끊기면 요약과 함께 끝난다.
             var games = new GameSessionTracker();
             var g0 = new DateTime(2026, 10, 16, 14, 0, 0);

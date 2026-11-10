@@ -163,15 +163,20 @@ internal sealed class AlertRules
     private static readonly TimeSpan CpuSustain = TimeSpan.FromSeconds(20);
 
     private const double ProcessCpuLimit = 50;
+    // 한 프로그램의 네트워크(보냄+받음)와 업로드(보냄)가 이만큼 30초 이어지면 경고한다.
+    private const double ProcessNetLimit = 10 * 1024 * 1024;
+    private const double ProcessUploadLimit = 2 * 1024 * 1024;
+    private static readonly TimeSpan NetSustain = TimeSpan.FromSeconds(30);
 
     private readonly Dictionary<string, bool> _active = new();
-    private readonly Dictionary<ProcessKey, DateTime> _hotSince = new();
-    private readonly HashSet<ProcessKey> _hotAlerted = new();
+    private readonly Sustained _hotCpu = new(CpuSustain);
+    private readonly Sustained _hotNet = new(NetSustain);
+    private readonly Sustained _hotUpload = new(NetSustain);
     private DateTime? _cpuHighSince;
 
     public IReadOnlyList<ActivityEvent> Evaluate(
         DateTime now, Snapshot snapshot, PerfSnapshot perf, IReadOnlyList<GpuDetail> gpus, IReadOnlyDictionary<int, DiskHealthInfo> disks,
-        double? cpuTempC = null)
+        double? cpuTempC = null, IReadOnlyDictionary<int, NetRate>? rates = null)
     {
         var alerts = new List<ActivityEvent>();
 
@@ -182,23 +187,29 @@ internal sealed class AlertRules
         }
 
         // 프로세스 하나가 전체 CPU의 50% 이상을 20초 넘게 쓰면 한 번 경고한다. 그 프로세스가 내려가거나 끝나면 다시 울릴 수 있다.
-        var hot = snapshot.Processes.Where(p => p.CpuPercent >= ProcessCpuLimit).ToList();
-        foreach (var p in hot)
+        foreach (var p in _hotCpu.Fire(now, snapshot.Processes.Where(p => p.CpuPercent >= ProcessCpuLimit)))
         {
-            _hotSince.TryAdd(p.Key, now);
-            if (!_hotAlerted.Contains(p.Key) && now - _hotSince[p.Key] >= CpuSustain)
-            {
-                _hotAlerted.Add(p.Key);
-                alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("프로세스 CPU 급증"),
-                    Strings.Fmt("{0}({1}) {2:F0}% (전체 CPU 50% 이상 20초 지속)", p.Name, p.Pid, p.CpuPercent), p.Pid));
-            }
+            alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("프로세스 CPU 급증"),
+                Strings.Fmt("{0}({1}) {2:F0}% (전체 CPU 50% 이상 20초 지속)", p.Name, p.Pid, p.CpuPercent), p.Pid));
         }
 
-        var hotKeys = hot.Select(p => p.Key).ToHashSet();
-        foreach (var key in _hotSince.Keys.Where(k => !hotKeys.Contains(k)).ToList())
+        // 네트워크: ETW가 도는 동안만 값이 있다(권한이 없으면 경고도 없다).
+        if (rates is not null)
         {
-            _hotSince.Remove(key);
-            _hotAlerted.Remove(key);
+            NetRate Rate(ProcessUsage p) => rates.GetValueOrDefault(p.Pid) ?? new NetRate(0, 0);
+            foreach (var p in _hotNet.Fire(now, snapshot.Processes.Where(p => Rate(p) is var r && r.SentBytesPerSec + r.ReceivedBytesPerSec >= ProcessNetLimit)))
+            {
+                var r = Rate(p);
+                alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("프로세스 네트워크 과다"),
+                    Strings.Fmt("{0}({1}) 받음 {2} 보냄 {3} (10MB/s 이상 30초 지속)", p.Name, p.Pid,
+                        RowBuilders.FormatRate(r.ReceivedBytesPerSec), RowBuilders.FormatRate(r.SentBytesPerSec)), p.Pid));
+            }
+
+            foreach (var p in _hotUpload.Fire(now, snapshot.Processes.Where(p => Rate(p).SentBytesPerSec >= ProcessUploadLimit)))
+            {
+                alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("프로세스 업로드 지속"),
+                    Strings.Fmt("{0}({1}) 보냄 {2} (2MB/s 이상 30초 지속)", p.Name, p.Pid, RowBuilders.FormatRate(Rate(p).SentBytesPerSec)), p.Pid));
+            }
         }
 
         // CPU: 기준 이상이 지속된 시간이 20초를 넘으면 경고 상태로 본다.
@@ -251,6 +262,36 @@ internal sealed class AlertRules
         }
 
         return alerts;
+    }
+
+    // 프로세스별로 기준을 넘은 상태가 hold 이상 이어지면 한 번 내보낸다. 기준 아래로 내려가거나 끝나면 다시 울릴 수 있다.
+    private sealed class Sustained(TimeSpan hold)
+    {
+        private readonly Dictionary<ProcessKey, DateTime> _since = new();
+        private readonly HashSet<ProcessKey> _fired = new();
+
+        public List<ProcessUsage> Fire(DateTime now, IEnumerable<ProcessUsage> over)
+        {
+            var list = over.ToList();
+            var keys = list.Select(p => p.Key).ToHashSet();
+            foreach (var key in _since.Keys.Where(k => !keys.Contains(k)).ToList())
+            {
+                _since.Remove(key);
+                _fired.Remove(key);
+            }
+
+            var fire = new List<ProcessUsage>();
+            foreach (var p in list)
+            {
+                _since.TryAdd(p.Key, now);
+                if (now - _since[p.Key] >= hold && _fired.Add(p.Key))
+                {
+                    fire.Add(p);
+                }
+            }
+
+            return fire;
+        }
     }
 
     // 값이 기준 이상이 되는 순간 경고를 만든다. 기준보다 Hysteresis 만큼 내려가야 다시 울릴 수 있다.
