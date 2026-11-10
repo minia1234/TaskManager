@@ -56,10 +56,10 @@ Keyboard shortcuts: Ctrl+Shift+Alt+T (bring up TaskMonitor from anywhere), Ctrl+
 2. Run it. If Windows shows "Windows protected your PC", choose "More info" and then "Run anyway" (the build is not code-signed yet).
 3. For background recording, turn on **Options > Start with Windows** and **Options > Close button hides to tray**. TaskMonitor then starts as a tray icon with no window.
 4. To see per-process network and SATA disk SMART, turn on **Options > Always run as administrator (no UAC prompt)**. UAC asks once when you turn it on. After that TaskMonitor opens as administrator with no prompt from a shortcut, Start with Windows or Ctrl+Shift+Esc. It registers a Task Scheduler task set to run with highest privileges (`TaskMonitor Elevated <user name>`).
-   - This option and Task Manager replacement below run the exe with high privileges. Any program that can write to the exe's folder could replace it and gain the same privileges, so a folder only administrators can write to (such as `C:\Program Files\TaskMonitor`) is safer. In that folder, get updates from the Releases page instead of automatically.
+   - This option and Task Manager replacement below run the exe with high privileges. Any program that can write to the exe's folder could replace it and gain the same privileges, so a folder only administrators can write to (such as `C:\Program Files\TaskMonitor`) is safer.
 5. To use it instead of Windows Task Manager, turn on **Options > Open TaskMonitor with Ctrl+Shift+Esc (replace Task Manager)** (UAC asks once). Ctrl+Shift+Esc, Task Manager on the taskbar and the Ctrl+Alt+Del screen then open TaskMonitor. Turn it off to go back to Windows Task Manager. If you move the exe to another folder, the next start asks whether to switch to the new location. An exe on a network or removable drive can't be used. The setting applies to every user of the PC, so if the exe sits in a folder other users can't read (such as your user folder), Task Manager won't open for them.
 
-When a new version comes out, TaskMonitor downloads it, checks it against the SHA-256 published on GitHub, and puts it in place. Choose "restart now" at the right of the menu bar, or it takes effect on the next start. If the exe sits in a folder it cannot write to, such as Program Files, choose "Get version" to download it from the Releases page.
+To update, download the new exe from the Releases page and replace the old one. TaskMonitor never updates itself.
 
 Only one copy runs at a time. Starting it again brings the open window to the front.
 
@@ -77,7 +77,7 @@ Windows 11 x64 (tested) or Windows 10 x64 (supported, not yet tested). No admini
 
 ## Privacy and records
 
-TaskMonitor contacts only GitHub (api.github.com, and the release file on github.com when a new version exists) to check for updates. It sends no usage records. It checks at startup and once a day; turn off **Options > Automatic updates** to stop it. Only when you choose "Check on VirusTotal" does it open the VirusTotal page for the executable's SHA-256 in your browser. The file itself is never uploaded. All records live in `%LOCALAPPDATA%\TaskMonitor`.
+TaskMonitor never connects to the internet and sends no usage records. It opens your browser in only two cases. "Search online" opens a Bing search for the process name, and "Check on VirusTotal" opens the VirusTotal page for the executable's SHA-256. The file itself is never uploaded. All records live in `%LOCALAPPDATA%\TaskMonitor`.
 
 | File | Contents |
 |---|---|

@@ -76,10 +76,10 @@ internal static class TaskManagerReplacement
     internal static string RestoreArguments(string exe, string regKey, string taskName) =>
         $"/d /c if not exist \"{exe}\" (reg delete \"{regKey}\" /v Debugger /f & schtasks /delete /tn \"{taskName}\" /f)";
 
-    // 앱이 끝난 뒤 exe와 업데이트가 남긴 .old를 지운다. 닫히는 데 걸리는 시간을 몰라 1초 간격으로 30번까지 다시 해 본다.
+    // 앱이 끝난 뒤 exe를 지운다. 닫히는 데 걸리는 시간을 몰라 1초 간격으로 30번까지 다시 해 본다.
     // shortcut: 경로에 %가 있으면 cmd가 풀어 버려 지우지 못한다(파일만 남음). 그런 경로가 실제로 보이면 PowerShell로 바꾼다.
     internal static string DeleteArguments(string exe) =>
-        $"/d /c for /l %i in (1,1,30) do @(ping -n 2 127.0.0.1 >nul & del /f /q \"{exe}\" \"{exe}.old\" 2>nul & if not exist \"{exe}\" exit /b)";
+        $"/d /c for /l %i in (1,1,30) do @(ping -n 2 127.0.0.1 >nul & del /f /q \"{exe}\" 2>nul & if not exist \"{exe}\" exit /b)";
 
     internal static Process? RunHidden(string arguments) => Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), arguments)
     {

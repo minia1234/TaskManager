@@ -18,7 +18,6 @@ internal sealed class AppSettings
     public string Language { get; set; } =
         System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ko" ? "ko" : "en";
     public bool CloseToTray { get; set; }                  // X 단추로 끄지 않고 트레이에 숨기기
-    public bool AutoUpdate { get; set; } = true;           // 시작할 때와 하루 한 번 GitHub Release 확인
     public List<string> AlertExclusions { get; set; } = new(); // 프로세스별 경고를 내지 않을 프로그램 이름
     public bool MiniWindow { get; set; }                   // 항상 위 미니 창을 띄워 둔다
     public int? MiniX { get; set; }

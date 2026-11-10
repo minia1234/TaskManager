@@ -103,9 +103,6 @@ internal sealed class MainForm : Form
     // 메뉴의 "종료"처럼 정말 끝낼 때 켠다. 꺼져 있으면 X 단추는 설정에 따라 트레이로 숨긴다.
     private bool _exiting;
     private string? _lastNotifiedAlert;
-    private ToolStripMenuItem? _updateItem;      // 새 버전이 있으면 메뉴 줄 오른쪽에 뜬다
-    private bool _updateStaged;                  // 새 exe를 이미 놓았다. 다시 받지 않는다
-    private bool _updateBalloon;                 // 마지막 트레이 알림이 업데이트 알림이다
     private bool _netColumnChecked;
     private MiniWindow? _mini;
     private readonly ToolStripMenuItem _miniMenu = new("미니 창 (항상 위)") { CheckOnClick = true };
@@ -282,7 +279,6 @@ internal sealed class MainForm : Form
             _worker.SetAlertExclusions(_settings.AlertExclusions);
             _worker.Start();
             StartWatchdog();
-            _ = UpdateLoopAsync();
             if (_settings.MiniWindow)
             {
                 SetMiniWindow(true);
@@ -511,15 +507,6 @@ internal sealed class MainForm : Form
             }
         };
         options.DropDownItems.Add(_elevatedStart);
-        var autoUpdate = Item("자동 업데이트", () => { });
-        autoUpdate.CheckOnClick = true;
-        autoUpdate.Checked = _settings.AutoUpdate;
-        autoUpdate.Click += (_, _) =>
-        {
-            _settings.AutoUpdate = autoUpdate.Checked;
-            _settings.Save();
-        };
-        options.DropDownItems.Add(autoUpdate);
         // 경고 제외 목록: 항목을 누르면 제외를 푼다. 추가는 프로세스 우클릭 > 경고에서 제외.
         var exclusions = new ToolStripMenuItem(Strings.Localize("경고 제외 목록"));
         exclusions.DropDownItems.Add(new ToolStripMenuItem("-"));
@@ -597,7 +584,6 @@ internal sealed class MainForm : Form
         records.DropDownItems.Add(Item("기록 폴더 열기", OpenRecordsFolder));
 
         var help = new ToolStripMenuItem("도움말");
-        help.DropDownItems.Add(Item("업데이트 확인", async () => ShowUpdate(await CheckForUpdateAsync(), manual: true)));
         help.DropDownItems.Add(Item("단축키", () => MessageBox.Show(this,
             Strings.Localize("Ctrl+Shift+Alt+T   어디서든 TaskMonitor 불러오기") + Environment.NewLine
             + Strings.Localize("Ctrl+F   검색") + Environment.NewLine
@@ -629,12 +615,6 @@ internal sealed class MainForm : Form
         // 경고 알림을 누르면 이벤트 페이지를 연다.
         _tray.BalloonTipClicked += (_, _) =>
         {
-            if (_updateBalloon)
-            {
-                RestartForUpdate();
-                return;
-            }
-
             RestoreFromTray();
             ShowPage(PageEvents);
         };
@@ -654,114 +634,6 @@ internal sealed class MainForm : Form
         {
             _worker?.RequestPage(_currentPage);
         }
-    }
-
-    // 시작할 때와 하루 한 번 새 버전을 확인한다. 끄면 확인만 건너뛰고, 도움말 > 업데이트 확인은 그대로 된다.
-    private async Task UpdateLoopAsync()
-    {
-        while (!_closing)
-        {
-            Updater.CleanupOld();
-            if (_settings.AutoUpdate && !_updateStaged)
-            {
-                ShowUpdate(await CheckForUpdateAsync());
-            }
-
-            await Task.Delay(TimeSpan.FromDays(1));
-        }
-    }
-
-    // 확인은 한 번에 하나만 돈다(겹치면 두 번째가 .new 파일을 못 열어 엉뚱한 안내를 낸다). 이미 바꿔 두었으면 다시 받지 않는다.
-    private Task<Updater.Result>? _updateCheck;
-
-    private async Task<Updater.Result> CheckForUpdateAsync()
-    {
-        if (_updateStaged)
-        {
-            return new Updater.Result(Updater.Outcome.Staged, _stagedVersion);
-        }
-
-        _updateCheck ??= Updater.CheckAsync();
-        try
-        {
-            return await _updateCheck;
-        }
-        finally
-        {
-            _updateCheck = null;
-        }
-    }
-
-    private Version? _stagedVersion;
-
-    private void ShowUpdate(Updater.Result result, bool manual = false)
-    {
-        if (_closing || (_updateStaged && !manual))
-        {
-            return;
-        }
-
-        switch (result.Outcome)
-        {
-            case Updater.Outcome.Staged:
-                _updateStaged = true;
-                _stagedVersion = result.Latest;
-                string ready = Strings.Fmt("새 버전 {0} 준비됨 — 지금 다시 시작", result.Latest);
-                SetUpdateItem(ready, RestartForUpdate);
-                if (manual)
-                {
-                    if (MessageBox.Show(this, ready + "?", "TaskMonitor", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
-                    {
-                        RestartForUpdate();
-                    }
-                }
-                else if (!Visible && _tray.Visible)
-                {
-                    _updateBalloon = true;
-                    _tray.ShowBalloonTip(10000, "TaskMonitor", ready, ToolTipIcon.Info);
-                }
-
-                break;
-            case Updater.Outcome.Manual:
-                SetUpdateItem(Strings.Fmt("새 버전 {0} 받기", result.Latest), OpenReleasesPage);
-                if (manual)
-                {
-                    MessageBox.Show(this, Strings.Fmt("새 버전 {0}이 있습니다. 이 폴더에는 자동으로 바꿔 넣을 수 없어 Release 페이지를 엽니다.", result.Latest),
-                        "TaskMonitor", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    OpenReleasesPage();
-                }
-
-                break;
-            case Updater.Outcome.UpToDate when manual:
-                MessageBox.Show(this, Strings.Fmt("최신 버전입니다 ({0}).", Updater.Current), "TaskMonitor", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                break;
-            case Updater.Outcome.Failed when manual:
-                MessageBox.Show(this, Strings.Fmt("업데이트를 확인하지 못했습니다: {0}", result.Detail), "TaskMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                break;
-        }
-    }
-
-    private void SetUpdateItem(string text, Action action)
-    {
-        if (_updateItem is not null)
-        {
-            _menu.Items.Remove(_updateItem);
-        }
-
-        _updateItem = new ToolStripMenuItem(text) { Alignment = ToolStripItemAlignment.Right };
-        _updateItem.Font = new Font(_updateItem.Font, FontStyle.Bold);
-        _updateItem.Click += (_, _) => action();
-        _menu.Items.Add(_updateItem);
-    }
-
-    private static void OpenReleasesPage() =>
-        Process.Start(new ProcessStartInfo(Updater.ReleasesPage) { UseShellExecute = true });
-
-    // 새 exe는 이미 제자리에 있다. 같은 경로로 새로 띄우고 이 창은 끝낸다(새 프로세스는 --restarted로 단일 실행 잠금을 기다린다).
-    private void RestartForUpdate()
-    {
-        Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = true, Arguments = "--restarted" });
-        ExitApp();
     }
 
     private readonly ToolStripMenuItem _replaceTaskmgr = new("Ctrl+Shift+Esc로 TaskMonitor 열기(작업 관리자 대체)");
@@ -806,7 +678,7 @@ internal sealed class MainForm : Form
 
     // 두 옵션 모두 이 exe 파일을 관리자 권한(또는 다른 사용자의 작업 관리자)으로 돌리게 된다. exe를 바꿔치기할 수 있으면 그 코드도 같은 권한을 얻는다.
     private bool ConfirmSystemWide(string title) => MessageBox.Show(this,
-        Strings.Fmt("이 exe가 UAC 확인 없이 높은 권한으로 실행됩니다.\n{0}\n\n이 폴더에 쓸 수 있는 프로그램은 exe를 바꿔 같은 권한을 얻을 수 있습니다. 관리자만 쓸 수 있는 폴더(예: C:\\Program Files\\TaskMonitor)에 두는 것이 안전합니다. 그 폴더에서는 자동 업데이트 대신 Release 페이지에서 받습니다.\n\n켤까요?", Environment.ProcessPath),
+        Strings.Fmt("이 exe가 UAC 확인 없이 높은 권한으로 실행됩니다.\n{0}\n\n이 폴더에 쓸 수 있는 프로그램은 exe를 바꿔 같은 권한을 얻을 수 있습니다. 관리자만 쓸 수 있는 폴더(예: C:\\Program Files\\TaskMonitor)에 두는 것이 안전합니다.\n\n켤까요?", Environment.ProcessPath),
         Strings.Localize(title), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
 
     private readonly ToolStripMenuItem _elevatedStart = new("항상 관리자 권한으로 실행(UAC 확인 없이)");
@@ -1175,7 +1047,6 @@ internal sealed class MainForm : Form
                 // 트레이에 숨어 있을 때는 아무도 상태 바를 보지 않으므로 새 경고를 알림으로 띄운다(같은 경고는 한 번만).
                 if (alert != _lastNotifiedAlert && AppState.Background && _tray.Visible)
                 {
-                    _updateBalloon = false;
                     _tray.ShowBalloonTip(10000, "TaskMonitor", alert, ToolTipIcon.Warning);
                 }
 
