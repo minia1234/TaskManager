@@ -175,6 +175,7 @@ internal sealed class AlertRules
     private readonly Sustained _hotNet = new(NetSustain);
     private readonly Sustained _hotUpload = new(NetSustain);
     private readonly Sustained _hung = new(HangSustain);
+    private readonly LeakWatch _leaks = new();
 
     // 경고 제외: 이 이름의 프로그램은 프로세스별 경고(CPU, 네트워크, 업로드, 응답 없음)를 내지 않는다.
     public IReadOnlySet<string> Excluded { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -227,6 +228,13 @@ internal sealed class AlertRules
                 alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("응답 없음"),
                     Strings.Fmt("{0}({1}) 15초 넘게 응답 없음", p.Name, p.Pid), p.Pid));
             }
+        }
+
+        foreach (var (p, from) in _leaks.Update(now, watched))
+        {
+            alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("메모리 누수 의심"),
+                Strings.Fmt("{0}({1}) 30분 동안 줄지 않고 늘어남: {2} → {3}", p.Name, p.Pid,
+                    RowBuilders.FormatMemory(from), RowBuilders.FormatMemory(p.PrivateBytes)), p.Pid));
         }
 
         // CPU: 기준 이상이 지속된 시간이 20초를 넘으면 경고 상태로 본다.
@@ -308,6 +316,55 @@ internal sealed class AlertRules
             }
 
             return fire;
+        }
+    }
+
+    // 메모리 누수 의심: 1분마다 개인 바이트(커밋)를 보고, 30분 동안 한 번도 줄지 않으면서 500MB 넘게 늘어난 프로세스를 한 번 알린다.
+    // 1% 넘게 줄면 처음부터 다시 잰다(GC나 캐시 정리로 줄어드는 프로그램은 누수로 보지 않는다).
+    internal sealed class LeakWatch
+    {
+        private static readonly TimeSpan Step = TimeSpan.FromMinutes(1);
+        private static readonly TimeSpan Window = TimeSpan.FromMinutes(30);
+        private const long MinGrowth = 500L * 1024 * 1024;
+
+        private readonly Dictionary<ProcessKey, (DateTime Since, long From, long Last, bool Fired)> _watch = new();
+        private DateTime _lastStep;
+
+        public List<(ProcessUsage Process, long From)> Update(DateTime now, IReadOnlyList<ProcessUsage> processes)
+        {
+            var fired = new List<(ProcessUsage, long)>();
+            if (now - _lastStep < Step)
+            {
+                return fired;
+            }
+
+            _lastStep = now;
+            var alive = new HashSet<ProcessKey>();
+            foreach (var p in processes)
+            {
+                alive.Add(p.Key);
+                if (!_watch.TryGetValue(p.Key, out var w) || p.PrivateBytes < w.Last - w.Last / 100)
+                {
+                    _watch[p.Key] = (now, p.PrivateBytes, p.PrivateBytes, false);
+                    continue;
+                }
+
+                w.Last = Math.Max(w.Last, p.PrivateBytes);
+                if (!w.Fired && now - w.Since >= Window && w.Last - w.From >= MinGrowth)
+                {
+                    w.Fired = true;
+                    fired.Add((p, w.From));
+                }
+
+                _watch[p.Key] = w;
+            }
+
+            foreach (var key in _watch.Keys.Where(k => !alive.Contains(k)).ToList())
+            {
+                _watch.Remove(key);
+            }
+
+            return fired;
         }
     }
 

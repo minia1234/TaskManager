@@ -38,6 +38,8 @@ internal static class Strings
         ["정보"] = "About",
         ["자동 업데이트"] = "Automatic updates",
         ["경고 제외 목록"] = "Alert exclusions",
+        ["메모리 누수 의심"] = "Possible memory leak",
+        ["{0}({1}) 30분 동안 줄지 않고 늘어남: {2} → {3}"] = "{0}({1}) grew without shrinking for 30 min: {2} → {3}",
         ["기록 타임라인"] = "Records timeline",
         ["시간"] = "Time",
         ["종류"] = "Type",

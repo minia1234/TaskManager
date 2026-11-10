@@ -636,6 +636,22 @@ internal static class SelfTest
             var quiet = new AlertRules { Excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "MINER.EXE" } };
             quiet.Evaluate(hogT0, hogSnap, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks, null, upload, hungSet);
             var muted = quiet.Evaluate(hogT0.AddSeconds(31), hogSnap, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks, null, upload, hungSet);
+            // 메모리 누수 의심: 1분마다 20MB씩 30분 늘면 한 번 알린다. 중간에 줄어든 프로세스는 알리지 않는다.
+            var leaks = new AlertRules.LeakWatch();
+            int leakFired = 0, dipFired = 0;
+            for (int minute = 0; minute <= 40; minute++)
+            {
+                long grow = (100 + 20L * minute) * 1024 * 1024;
+                long dip = (100 + 20L * minute - (minute == 15 ? 50 : 0)) * 1024 * 1024;
+                var procs = new[] { hog with { PrivateBytes = grow }, hog with { Pid = 401, PrivateBytes = minute >= 15 ? dip : grow } };
+                foreach (var (p, _) in leaks.Update(hogT0.AddMinutes(minute), procs))
+                {
+                    if (p.Pid == 400) leakFired++; else dipFired++;
+                }
+            }
+
+            Check("메모리 누수 의심 경고(30분 계속 증가, 줄면 다시 잼)", leakFired == 1 && dipFired == 0, $"계속 증가 {leakFired}, 중간에 줄어듦 {dipFired}");
+
             Check("응답 없음 경고와 경고 제외", hang.Count == 1 && hang[0].Subject == "응답 없음" && muted.Count == 0,
                 $"응답 없음 {hang.Count}, 제외 후 {muted.Count}");
 
