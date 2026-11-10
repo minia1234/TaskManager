@@ -55,6 +55,9 @@ Keyboard shortcuts: Ctrl+Shift+Alt+T (bring up TaskMonitor from anywhere), Ctrl+
 1. Put `TaskMonitor.exe` in any folder.
 2. Run it. If Windows shows "Windows protected your PC", choose "More info" and then "Run anyway" (the build is not code-signed yet).
 3. For background recording, turn on **Options > Start with Windows** and **Options > Close button hides to tray**. TaskMonitor then starts as a tray icon with no window.
+4. To see per-process network and SATA disk SMART, turn on **Options > Always run as administrator (no UAC prompt)**. UAC asks once when you turn it on. After that TaskMonitor opens as administrator with no prompt from a shortcut, Start with Windows or Ctrl+Shift+Esc. It registers a Task Scheduler task set to run with highest privileges (`TaskMonitor Elevated <user name>`).
+   - This option and Task Manager replacement below run the exe with high privileges. Any program that can write to the exe's folder could replace it and gain the same privileges, so a folder only administrators can write to (such as `C:\Program Files\TaskMonitor`) is safer. In that folder, get updates from the Releases page instead of automatically.
+5. To use it instead of Windows Task Manager, turn on **Options > Open TaskMonitor with Ctrl+Shift+Esc (replace Task Manager)** (UAC asks once). Ctrl+Shift+Esc, Task Manager on the taskbar and the Ctrl+Alt+Del screen then open TaskMonitor. Turn it off to go back to Windows Task Manager. If you move the exe to another folder, the next start asks whether to switch to the new location. An exe on a network or removable drive can't be used. The setting applies to every user of the PC, so if the exe sits in a folder other users can't read (such as your user folder), Task Manager won't open for them.
 
 When a new version comes out, TaskMonitor downloads it, checks it against the SHA-256 published on GitHub, and puts it in place. Choose "restart now" at the right of the menu bar, or it takes effect on the next start. If the exe sits in a folder it cannot write to, such as Program Files, choose "Get version" to download it from the Releases page.
 
@@ -85,7 +88,7 @@ TaskMonitor contacts only GitHub (api.github.com, and the release file on github
 | `settings.json` | Settings. |
 | `crash.log`, `freeze.log` | Unexpected errors and hangs. Please attach these when reporting a problem. |
 
-**Records > Open records folder** opens the folder. To remove the app, delete `TaskMonitor.exe` and this folder. If you turned on Start with Windows, turn it off in Options first.
+**Records > Open records folder** opens the folder. To remove the app, choose **File > Uninstall TaskMonitor...**. It turns off Task Manager replacement, running as administrator and Start with Windows, then deletes the exe. The records folder stays, so delete it yourself if you don't need it. If you only delete the exe, a restore task (`TaskMonitor Restore Task Manager`) puts Windows Task Manager back at the next boot or logon and then deletes itself. Until then Ctrl+Shift+Esc opens nothing.
 
 ## Known limits
 

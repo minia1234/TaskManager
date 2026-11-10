@@ -130,6 +130,7 @@ internal sealed class MainForm : Form
             };
         }
 
+        Shown += (_, _) => CheckTaskManagerPath();
         Text = "TaskMonitor";
         Icon = AppIcon;
         Width = 1180;
@@ -429,6 +430,7 @@ internal sealed class MainForm : Form
         elevate.Enabled = !elevated;
         file.DropDownItems.Add(elevate);
         file.DropDownItems.Add(new ToolStripSeparator());
+        file.DropDownItems.Add(Item("TaskMonitor 제거...", Uninstall));
         file.DropDownItems.Add(Item("종료", ExitApp));
 
         var options = new ToolStripMenuItem("옵션");
@@ -481,6 +483,34 @@ internal sealed class MainForm : Form
             autoStart.Checked = AutoStart.IsEnabled();
         };
         options.DropDownItems.Add(autoStart);
+        _replaceTaskmgr.Checked = TaskManagerReplacement.RegisteredPath() is not null;
+        _replaceTaskmgr.Click += (_, _) =>
+        {
+            bool on = TaskManagerReplacement.RegisteredPath() is null;
+            if (!on || ConfirmSystemWide("작업 관리자 대체"))
+            {
+                SetTaskManagerReplaced(on);
+            }
+            else
+            {
+                _replaceTaskmgr.Checked = false;
+            }
+        };
+        options.DropDownItems.Add(_replaceTaskmgr);
+        _elevatedStart.Checked = ElevatedStart.IsEnabled();
+        _elevatedStart.Click += (_, _) =>
+        {
+            bool on = !ElevatedStart.IsEnabled();
+            if (!on || ConfirmSystemWide("항상 관리자 권한으로 실행(UAC 확인 없이)"))
+            {
+                SetElevatedStart(on);
+            }
+            else
+            {
+                _elevatedStart.Checked = false;
+            }
+        };
+        options.DropDownItems.Add(_elevatedStart);
         var autoUpdate = Item("자동 업데이트", () => { });
         autoUpdate.CheckOnClick = true;
         autoUpdate.Checked = _settings.AutoUpdate;
@@ -731,6 +761,122 @@ internal sealed class MainForm : Form
     private void RestartForUpdate()
     {
         Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = true, Arguments = "--restarted" });
+        ExitApp();
+    }
+
+    private readonly ToolStripMenuItem _replaceTaskmgr = new("Ctrl+Shift+Esc로 TaskMonitor 열기(작업 관리자 대체)");
+
+    // 시스템 설정을 바꾸는 일을 관리자 권한으로 한다. 이미 관리자면 바로, 아니면 UAC로 이 exe를 helperArg로 한 번 더 띄운다.
+    private void RunAsAdministrator(Action direct, string helperArg, string title)
+    {
+        try
+        {
+            if (IsElevated())
+            {
+                direct();
+            }
+            else
+            {
+                using var helper = Process.Start(new ProcessStartInfo(Environment.ProcessPath!)
+                {
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    Arguments = helperArg,
+                });
+                helper!.WaitForExit();
+            }
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            // UAC 창에서 취소했다.
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Strings.Localize(title), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    // 원하는 상태가 되면 true.
+    private bool SetTaskManagerReplaced(bool on)
+    {
+        RunAsAdministrator(() => TaskManagerReplacement.Set(on), on ? "--replace-taskmgr" : "--restore-taskmgr", "작업 관리자 대체");
+        _replaceTaskmgr.Checked = TaskManagerReplacement.RegisteredPath() is not null;
+        return on ? TaskManagerReplacement.IsCurrent() : !_replaceTaskmgr.Checked;
+    }
+
+    // 두 옵션 모두 이 exe 파일을 관리자 권한(또는 다른 사용자의 작업 관리자)으로 돌리게 된다. exe를 바꿔치기할 수 있으면 그 코드도 같은 권한을 얻는다.
+    private bool ConfirmSystemWide(string title) => MessageBox.Show(this,
+        Strings.Fmt("이 exe가 UAC 확인 없이 높은 권한으로 실행됩니다.\n{0}\n\n이 폴더에 쓸 수 있는 프로그램은 exe를 바꿔 같은 권한을 얻을 수 있습니다. 관리자만 쓸 수 있는 폴더(예: C:\\Program Files\\TaskMonitor)에 두는 것이 안전합니다. 그 폴더에서는 자동 업데이트 대신 Release 페이지에서 받습니다.\n\n켤까요?", Environment.ProcessPath),
+        Strings.Localize(title), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+
+    private readonly ToolStripMenuItem _elevatedStart = new("항상 관리자 권한으로 실행(UAC 확인 없이)");
+
+    // 켜면 지금 창도 관리자 권한으로 바로 다시 띄운다(네트워크 측정이 바로 켜지게).
+    private bool SetElevatedStart(bool on)
+    {
+        RunAsAdministrator(() => ElevatedStart.Set(on), on ? "--elevated-start-on" : "--elevated-start-off", "항상 관리자 권한으로 실행(UAC 확인 없이)");
+        _elevatedStart.Checked = ElevatedStart.IsEnabled();
+        if (on && _elevatedStart.Checked && !IsElevated() && ElevatedStart.TryRun("--restarted"))
+        {
+            ExitApp();
+        }
+
+        return _elevatedStart.Checked == on;
+    }
+
+    // exe를 옮기면 Ctrl+Shift+Esc가 옛 위치를 연다. 실행할 때마다 확인해서 지금 위치로 바꾸거나 원래 작업 관리자로 되돌린다.
+    private void CheckTaskManagerPath()
+    {
+        string? registered = TaskManagerReplacement.RegisteredPath();
+        if (registered is null || TaskManagerReplacement.IsCurrent())
+        {
+            return;
+        }
+
+        var answer = MessageBox.Show(this,
+            Strings.Fmt("Ctrl+Shift+Esc가 다른 위치의 TaskMonitor를 엽니다.\n{0}\n\n예: 지금 실행한 TaskMonitor로 바꿉니다.\n아니요: Windows 작업 관리자로 되돌립니다.", registered),
+            Strings.Localize("작업 관리자 대체"), MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        if (answer != DialogResult.Cancel)
+        {
+            SetTaskManagerReplaced(answer == DialogResult.Yes);
+        }
+    }
+
+    // 설치 프로그램이 없으므로 여기서 시스템에 남긴 것(작업 관리자 대체, 시작 시 실행)을 되돌리고 exe를 지운다. 기록과 설정은 남긴다.
+    private void Uninstall()
+    {
+        string data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TaskMonitor");
+        var answer = MessageBox.Show(this,
+            Strings.Fmt("TaskMonitor를 제거할까요?\n\n작업 관리자 대체, 관리자 권한 실행, Windows 시작 시 실행을 해제하고 이 exe 파일을 지웁니다.\n기록과 설정은 남습니다. 필요 없으면 직접 지우세요.\n{0}", data),
+            Strings.Localize("TaskMonitor 제거"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+        if (answer != DialogResult.Yes)
+        {
+            return;
+        }
+
+        if (TaskManagerReplacement.RegisteredPath() is not null && !SetTaskManagerReplaced(false))
+        {
+            MessageBox.Show(this, Strings.Localize("시스템 설정을 되돌리지 못해 제거를 멈췄습니다."), Strings.Localize("TaskMonitor 제거"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            AutoStart.Set(false);
+            TaskManagerReplacement.RunHidden(TaskManagerReplacement.DeleteArguments(Environment.ProcessPath!))?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, Strings.Localize("TaskMonitor 제거"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        // 지금 프로세스가 이 작업으로 떴을 수 있어 맨 마지막에 지운다(오류는 안에서 알린다). 못 지워도 exe가 없으면 아무것도 실행하지 않는다.
+        if (ElevatedStart.IsEnabled())
+        {
+            SetElevatedStart(false);
+        }
+
         ExitApp();
     }
 

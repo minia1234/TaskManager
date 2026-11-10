@@ -19,6 +19,40 @@ internal static class Program
             return SelfTest.Run(args[1]);
         }
 
+        // 작업 관리자 대체를 켜고 끄는 관리자 권한 실행(옵션 메뉴가 UAC로 띄운다). 창 없이 끝난다.
+        if (args.Length == 1 && args[0] is "--replace-taskmgr" or "--restore-taskmgr" or "--elevated-start-on" or "--elevated-start-off")
+        {
+            try
+            {
+                if (args[0].StartsWith("--elevated-start", StringComparison.Ordinal))
+                {
+                    ElevatedStart.Set(args[0] == "--elevated-start-on");
+                }
+                else
+                {
+                    TaskManagerReplacement.Set(args[0] == "--replace-taskmgr");
+                }
+
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "TaskMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return 1;
+            }
+        }
+
+        // 항상 관리자 권한으로 실행을 켰으면 일반 권한 실행(바로 가기, 시작 시 실행, Ctrl+Shift+Esc)을 관리자 권한 작업으로 넘긴다.
+        if (!args.Contains(ElevatedStart.FromTaskArg) && !MainForm.IsElevated())
+        {
+            string forward = args.Contains("--restarted") ? "--restarted" : args.Contains("--tray") ? "--tray" : "--show";
+            AllowSetForegroundWindow(-1);
+            if (ElevatedStart.TryRun(forward))
+            {
+                return 0;
+            }
+        }
+
         // 한 번에 하나만 실행한다. 두 번째 실행은 이미 떠 있는 창을 앞으로 불러오고 끝난다(기록 파일을 두 프로세스가 덮어쓰지 않게).
         EventWaitHandle activate;
         bool first;

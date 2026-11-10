@@ -148,7 +148,7 @@ internal static class StartupItems
         return rows;
     }
 
-    private static dynamic TaskService()
+    internal static dynamic TaskService()
     {
         dynamic service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service", throwOnError: true)!)!;
         service.Connect();

@@ -1,5 +1,6 @@
 ﻿using System.Buffers.Binary;
 using System.Diagnostics;
+using Microsoft.Win32;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -241,6 +242,7 @@ internal static class SelfTest
             Check("절전 요청 조회(powercfg 출력 해독)", power.Length > 0 && !power.Contains('�'), power.Split('\n')[0].Trim());
             uint? scheduleType = ServiceList.StartType("Schedule");
             Check("서비스 시작 유형 읽기(작업 스케줄러 = 자동)", scheduleType == ServiceList.StartAuto, $"{scheduleType}");
+            CheckTaskManagerCommands(Check);
         }
         catch (Exception ex)
         {
@@ -1120,6 +1122,53 @@ internal static class SelfTest
     }
 
     // 마우스·헤더 처리 메서드는 private/protected이므로 리플렉션으로 호출한다(검증 전용).
+    // 복구 작업과 제거가 쓰는 cmd 명령을 실제로 돌려 본다. HKLM 대신 HKCU 시험 키, 없는 작업 이름을 쓴다(관리자 권한 없이).
+    private static void CheckTaskManagerCommands(Action<string, bool, string> check)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "TaskMonitor 시험 & (1)");
+        Directory.CreateDirectory(dir);
+        string exe = Path.Combine(dir, "TaskMonitor.exe");
+        const string key = @"Software\TaskMonitorSelfTest";
+        try
+        {
+            File.WriteAllText(exe, "");
+            using (var k = Registry.CurrentUser.CreateSubKey(key))
+            {
+                k.SetValue("Debugger", exe);
+            }
+
+            string restore = TaskManagerReplacement.RestoreArguments(exe, @"HKCU\" + key, "TaskMonitor SelfTest Missing Task");
+            TaskManagerReplacement.RunHidden(restore)!.WaitForExit(10000);
+            bool keptWhilePresent = Registry.CurrentUser.OpenSubKey(key)?.GetValue("Debugger") is not null;
+            File.Delete(exe);
+            TaskManagerReplacement.RunHidden(restore)!.WaitForExit(10000);
+            bool removedWhenMissing = Registry.CurrentUser.OpenSubKey(key)?.GetValue("Debugger") is null;
+            check("작업 관리자 복구 명령(exe 있으면 그대로, 없으면 되돌림)", keptWhilePresent && removedWhenMissing, $"present={keptWhilePresent} missing={removedWhenMissing}");
+
+            File.WriteAllText(exe, "");
+            File.WriteAllText(exe + ".old", "");
+            using (var holder = new FileStream(exe, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                // 실행 중인 exe처럼 잠깐 잠가 두어 다시 시도하는지 본다.
+                TaskManagerReplacement.RunHidden(TaskManagerReplacement.DeleteArguments(exe));
+                Thread.Sleep(2500);
+            }
+
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while ((File.Exists(exe) || File.Exists(exe + ".old")) && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(200);
+            }
+
+            check("제거 시 exe 지우기(잠긴 동안 다시 시도)", !File.Exists(exe) && !File.Exists(exe + ".old"), dir);
+        }
+        finally
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(key, throwOnMissingSubKey: false);
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     private static void Invoke(object target, string method, params object[] args)
     {
         var m = target.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)

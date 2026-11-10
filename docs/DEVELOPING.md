@@ -53,6 +53,11 @@ TaskMonitor.exe --check out.txt
 | `--tray` | 창 없이 트레이로 시작합니다. "Windows 시작 시 실행"이 이 인수로 등록합니다. |
 | `--selftest <파일>` | 자체 검증. |
 | `--check <파일>` | CPU 샘플 4회 기록. |
+| `--replace-taskmgr`, `--restore-taskmgr` | 작업 관리자 대체를 켜고 끕니다. 관리자 권한으로 실행해야 하며 옵션 메뉴가 UAC로 띄웁니다. |
+| `--elevated-start-on`, `--elevated-start-off` | 관리자 권한 실행 작업을 등록하고 지웁니다. 위와 같습니다. |
+| `--from-task` | 관리자 권한 실행 작업이 붙입니다. 이 인수가 없고 일반 권한이면 작업으로 넘기고 끝납니다. |
+
+작업 관리자 대체로 열리면 Windows가 첫 인수로 taskmgr.exe 경로를 붙입니다. 모르는 인수는 무시합니다.
 
 한 번에 하나만 실행됩니다. 두 번째 실행은 떠 있는 창을 앞으로 불러오고 끝납니다.
 
