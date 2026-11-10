@@ -82,6 +82,7 @@ internal static class RowBuilders
         new("name", "이름", 240),
         new("publisher", "게시자", 200, Fill: true),
         new("status", "상태", 110),
+        new("source", "위치", 150),
         new("command", "명령", 420),
     };
 
@@ -317,7 +318,7 @@ internal static class RowBuilders
     {
         return items.Select(item =>
         {
-            var row = new Row { Key = $"st:{item.Hive}:{item.Name}", Tag = item };
+            var row = new Row { Key = item.TaskPath is not null ? "st:task:" + item.TaskPath : $"st:{item.Hive}:{item.Name}", Tag = item };
             row.Cells["name"] = item.Name;
             row.Sort["name"] = item.Name;
             row.Cells["publisher"] = item.Publisher;
@@ -326,6 +327,8 @@ internal static class RowBuilders
             string status = Strings.IsEnglish ? (item.Enabled ? "Enabled" : "Disabled") : (item.Enabled ? "사용" : "사용 안 함");
             row.Cells["status"] = status;
             row.Sort["status"] = status;
+            row.Cells["source"] = Strings.Localize(item.Source);
+            row.Sort["source"] = row.Cells["source"];
             row.Cells["command"] = item.Command;
             row.Sort["command"] = item.Command;
             return row;

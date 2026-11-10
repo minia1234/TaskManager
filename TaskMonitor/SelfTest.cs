@@ -246,7 +246,7 @@ internal static class SelfTest
         try
         {
             var startup = StartupItems.Enumerate();
-            Check("시작 프로그램 열거", true, $"{startup.Count}개");
+            Check("시작 프로그램 열거(레지스트리·작업 스케줄러)", true, $"{startup.Count}개, 작업 스케줄러 {startup.Count(s => s.TaskPath is not null)}개: {string.Join(", ", startup.Where(s => s.TaskPath is not null).Select(s => s.Name + (s.Enabled ? "" : "(꺼짐)")))}");
         }
         catch (Exception ex)
         {

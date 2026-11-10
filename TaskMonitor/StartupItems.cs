@@ -4,7 +4,11 @@ using Microsoft.Win32;
 
 namespace TaskMonitor;
 
-internal sealed record StartupRow(string Name, string Command, string Publisher, bool Enabled, RegistryHive Hive);
+// TaskPath가 있으면 작업 스케줄러 항목(로그온·부팅 때 실행되는 작업)이다.
+internal sealed record StartupRow(string Name, string Command, string Publisher, bool Enabled, RegistryHive Hive, string? TaskPath = null)
+{
+    public string Source => TaskPath is not null ? "작업 스케줄러" : Hive == RegistryHive.CurrentUser ? "레지스트리(사용자)" : "레지스트리(모든 사용자)";
+}
 
 // 시작 프로그램: Run 키 목록과 StartupApproved 키로 사용 여부를 읽고 바꾼다.
 // 작업 관리자와 같은 방식이다. HKLM을 바꾸려면 관리자 권한이 필요하다.
@@ -63,11 +67,90 @@ internal static class StartupItems
             }
         }
 
+        result.AddRange(ScheduledTasks());
         return result.OrderBy(r => r.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+    }
+
+    // 작업 스케줄러에서 로그온(9)·부팅(8) 때 실행되는 작업. Windows 자체 작업(\Microsoft 폴더)은 뺀다.
+    // COM으로 폴더를 다 훑어야 해서 30초 동안 결과를 재사용한다(이 페이지는 3초마다 다시 읽는다).
+    private static (DateTime At, List<StartupRow> Rows) _tasks = (DateTime.MinValue, new());
+
+    private static List<StartupRow> ScheduledTasks()
+    {
+        if (DateTime.UtcNow - _tasks.At < TimeSpan.FromSeconds(30))
+        {
+            return _tasks.Rows;
+        }
+
+        var rows = new List<StartupRow>();
+        try
+        {
+            void Walk(dynamic folder)
+            {
+                if (((string)folder.Path).StartsWith(@"\Microsoft", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                foreach (dynamic task in folder.GetTasks(1)) // 1 = 숨은 작업 포함
+                {
+                    dynamic definition = task.Definition;
+                    bool atStart = false;
+                    foreach (dynamic trigger in definition.Triggers)
+                    {
+                        atStart |= (int)trigger.Type is 8 or 9;
+                    }
+
+                    string command = "";
+                    foreach (dynamic action in definition.Actions)
+                    {
+                        if ((int)action.Type == 0) // 0 = 프로그램 실행
+                        {
+                            command = $"\"{Environment.ExpandEnvironmentVariables((string)action.Path)}\" {action.Arguments}".TrimEnd();
+                            break;
+                        }
+                    }
+
+                    if (atStart)
+                    {
+                        rows.Add(new StartupRow((string)task.Name, command, PublisherOf(command), (bool)task.Enabled, RegistryHive.CurrentUser, (string)task.Path));
+                    }
+                }
+
+                foreach (dynamic sub in folder.GetFolders(0))
+                {
+                    Walk(sub);
+                }
+            }
+
+            Walk(TaskService().GetFolder(@"\"));
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException or Microsoft.CSharp.RuntimeBinder.RuntimeBinderException)
+        {
+            // 작업 스케줄러 서비스가 꺼져 있거나 읽을 수 없으면 레지스트리 항목만 보인다.
+        }
+
+        _tasks = (DateTime.UtcNow, rows);
+        return rows;
+    }
+
+    private static dynamic TaskService()
+    {
+        dynamic service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service", throwOnError: true)!)!;
+        service.Connect();
+        return service;
     }
 
     internal static void SetEnabled(StartupRow row, bool enabled)
     {
+        if (row.TaskPath is not null)
+        {
+            // 다른 계정이나 관리자가 만든 작업은 관리자 권한이 있어야 바뀐다(실패하면 오류 메시지로 알린다).
+            TaskService().GetFolder(@"\").GetTask(row.TaskPath).Enabled = enabled;
+            _tasks = (DateTime.MinValue, _tasks.Rows);
+            return;
+        }
+
         using var root = RegistryKey.OpenBaseKey(row.Hive, RegistryView.Default);
         using var approved = root.CreateSubKey(ApprovedPath, true);
 
