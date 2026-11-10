@@ -32,12 +32,23 @@ Get `TaskMonitor.exe` from [Releases](https://github.com/minia1234/TaskManager/r
 
 The other pages:
 
-- **Processes.** Programs with the same name group as `name(count)` and expand. The large numbers in the header are total CPU, memory, and the busiest disk and GPU. The View menu switches to a parent-child tree. Choose columns adds connection count, network and FPS. Right-click for end task, end process tree, efficiency mode, priority, affinity, dump file, the analysis window and more.
+- **Processes.** Programs with the same name group as `name(count)` and expand. The large numbers in the header are total CPU, memory, and the busiest disk and GPU. The status column shows "Not responding" and "Suspended". The View menu switches to a parent-child tree. Choose columns adds connection count, network and FPS (the Network column is on by default where network measurement works). Right-click for end task, end process tree, suspend, efficiency mode, priority, affinity, dump file, the analysis window, Check on VirusTotal, Exclude from alerts and more. The explorer.exe row can restart Windows Explorer.
+- **Performance > Network.** Under the adapter values, the five programs using the most network.
 - **App history.** Cumulative CPU time and I/O transferred (file, network and pipe) per program.
-- **Startup apps, Users, Details, Services.** The same roles as in Task Manager. Stopping or restarting a service asks first.
-- **Records menu.** Cause report, compare records, export to CSV, open the records folder.
+- **Startup apps.** Run registry entries plus Task Scheduler tasks that run at logon or boot (Windows' own tasks left out).
+- **Users, Details, Services.** The same roles as in Task Manager. Right-click a service to change its startup type (Automatic, Manual, Disabled). Stopping, restarting or disabling a service asks first.
+- **Records menu.** Cause report, compare records, records timeline (alerts and game sessions marked over CPU, memory and GPU graphs), export to CSV, open the records folder.
+- **View menu.** Programs blocking sleep (`powercfg /requests`, needs administrator rights) and an always-on-top mini window.
 
-Alert limits are GPU 85°C, GPU memory junction 100°C, disk 70°C, CPU 95°C, memory 90%, total CPU 90% for 20 s, and one process over 50% of total CPU for 20 s.
+Alert limits are below. Right-click > Exclude from alerts turns off the per-process alerts for a program.
+
+- GPU 85°C, GPU memory junction 100°C, disk 70°C, CPU 95°C, memory 90%, total CPU 90% for 20 s
+- One process over 50% of total CPU for 20 s
+- One process using 10 MB/s or more of network (sent plus received) for 30 s, or uploading 2 MB/s or more for 30 s
+- A window not responding for over 15 s
+- One process's memory (private bytes) growing by over 500 MB in 30 minutes without ever shrinking (possible leak)
+
+Keyboard shortcuts: Ctrl+Shift+Alt+T (bring up TaskMonitor from anywhere), Ctrl+F (search), Ctrl+1 to 8 (pages), Delete (end the selected task), Ctrl+N (run new task), F5 (refresh).
 
 ## Install and run
 
@@ -63,7 +74,7 @@ Windows 11 x64 (tested) or Windows 10 x64 (supported, not yet tested). No admini
 
 ## Privacy and records
 
-TaskMonitor contacts only GitHub (api.github.com, and the release file on github.com when a new version exists) to check for updates. It sends no usage records. It checks at startup and once a day; turn off **Options > Automatic updates** to stop it. All records live in `%LOCALAPPDATA%\TaskMonitor`.
+TaskMonitor contacts only GitHub (api.github.com, and the release file on github.com when a new version exists) to check for updates. It sends no usage records. It checks at startup and once a day; turn off **Options > Automatic updates** to stop it. Only when you choose "Check on VirusTotal" does it open the VirusTotal page for the executable's SHA-256 in your browser. The file itself is never uploaded. All records live in `%LOCALAPPDATA%\TaskMonitor`.
 
 | File | Contents |
 |---|---|
