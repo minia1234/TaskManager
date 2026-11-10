@@ -19,6 +19,7 @@ internal sealed class AppSettings
         System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ko" ? "ko" : "en";
     public bool CloseToTray { get; set; }                  // X 단추로 끄지 않고 트레이에 숨기기
     public bool AutoUpdate { get; set; } = true;           // 시작할 때와 하루 한 번 GitHub Release 확인
+    public List<string> AlertExclusions { get; set; } = new(); // 프로세스별 경고를 내지 않을 프로그램 이름
     public Dictionary<string, List<string>> Columns { get; set; } = new();
 
     private static string FilePath => Path.Combine(
@@ -33,6 +34,7 @@ internal sealed class AppSettings
                 var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
                 // 손으로 고친 파일에 "Columns": null이 있어도 시작이 죽지 않게 한다.
                 loaded.Columns ??= new();
+                loaded.AlertExclusions ??= new();
                 return loaded;
             }
         }

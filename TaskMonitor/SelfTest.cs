@@ -181,6 +181,21 @@ internal static class SelfTest
 
         Check("창이 없는 프로세스 전환", !ProcessActions.SwitchTo(child.Pid), "보이는 창이 없으면 false");
 
+        // 일시 중단: 샘플러가 모든 스레드가 일시 중단 상태인 것을 읽어 내야 하고, 해제하면 풀려야 한다.
+        try
+        {
+            bool SuspendedNow() => sampler.Sample()?.Processes.FirstOrDefault(p => p.Pid == child.Pid)?.Suspended == true;
+            ProcessActions.Suspend(childKey, true);
+            bool paused = SuspendedNow();
+            ProcessActions.Suspend(childKey, false);
+            bool resumed = !SuspendedNow();
+            Check("일시 중단·해제(상태 감지 포함)", paused && resumed, $"중단 {paused}, 해제 {resumed}");
+        }
+        catch (Exception ex)
+        {
+            Check("일시 중단·해제(상태 감지 포함)", false, ex.Message);
+        }
+
         var parentUsage = snap2!.Processes.FirstOrDefault(p => p.Pid == parent.Id);
         int treeFailures = parentUsage is null ? -1 : ProcessActions.EndTree(parentUsage, snap2.Processes);
         Thread.Sleep(800);
@@ -613,6 +628,17 @@ internal static class SelfTest
             var noEtw = new AlertRules();
             noEtw.Evaluate(hogT0, idle, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks);
             var n3 = noEtw.Evaluate(hogT0.AddSeconds(31), idle, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks);
+            // 응답 없음: 10초 이어지면 한 번. 경고 제외에 든 이름은 프로세스별 경고를 내지 않는다.
+            var hangRules = new AlertRules();
+            var hungSet = new HashSet<int> { 400 };
+            hangRules.Evaluate(hogT0, idle, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks, null, null, hungSet);
+            var hang = hangRules.Evaluate(hogT0.AddSeconds(11), idle, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks, null, null, hungSet);
+            var quiet = new AlertRules { Excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "MINER.EXE" } };
+            quiet.Evaluate(hogT0, hogSnap, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks, null, upload, hungSet);
+            var muted = quiet.Evaluate(hogT0.AddSeconds(31), hogSnap, PerfSnapshot.Empty, Array.Empty<GpuDetail>(), noDisks, null, upload, hungSet);
+            Check("응답 없음 경고와 경고 제외", hang.Count == 1 && hang[0].Subject == "응답 없음" && muted.Count == 0,
+                $"응답 없음 {hang.Count}, 제외 후 {muted.Count}");
+
             Check("프로세스 네트워크·업로드 경고(30초 지속, 한 번만)", n0.Count == 0 && n2.Count == 0 && n3.Count == 0
                 && n1.Select(e => e.Subject).Order().SequenceEqual(new[] { "프로세스 네트워크 과다", "프로세스 업로드 지속" }.Order()),
                 $"0초 {n0.Count}, 31초 {string.Join("/", n1.Select(e => e.Detail))}, 32초 {n2.Count}");
@@ -920,7 +946,32 @@ internal static class SelfTest
         }
 
         CheckUpdater(Check);
+        CheckHungWindow(Check);
         return Finish(outPath, log, failures);
+    }
+
+    // 응답 없음 감지: 화면 밖에 창을 하나 띄우고 그 스레드가 7초 동안 메시지를 처리하지 않게 한다.
+    private static void CheckHungWindow(Action<string, bool, string> check)
+    {
+        bool before = false, during = false;
+        using var shown = new ManualResetEventSlim();
+        var thread = new Thread(() =>
+        {
+            using var form = new Form { StartPosition = FormStartPosition.Manual, Location = new System.Drawing.Point(-3000, -3000), ShowInTaskbar = false, Text = "hang test" };
+            form.Show();
+            Application.DoEvents();
+            shown.Set();
+            Thread.Sleep(7000);
+            Application.DoEvents();
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        shown.Wait();
+        before = Win32.HungWindowProcesses().Contains(Environment.ProcessId);
+        Thread.Sleep(6500);
+        during = Win32.HungWindowProcesses().Contains(Environment.ProcessId);
+        thread.Join();
+        check("응답 없음 창 감지(5초 넘게 메시지 처리 안 함)", !before && during, $"처음 {before}, 6.5초 뒤 {during}");
     }
 
     // 자동 업데이트: localhost에 가짜 Release를 띄워 받기·해시 확인·교체를 실제 파일로 확인한다(GitHub에는 접속하지 않는다).

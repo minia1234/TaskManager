@@ -358,8 +358,13 @@ internal static class RowBuilders
         var row = new Row { Key = "pid:" + p.Pid, Tag = target, Icon = IconCache.Get(detail.Path) };
         row.Cells["name"] = indent + p.Name;
         row.Sort["name"] = p.Name;
-        row.Cells["status"] = Strings.Localize("실행 중");
+        row.Cells["status"] = Strings.Localize(p.Suspended ? "일시 중단됨" : Win32.LastHung.Contains(p.Pid) ? "응답 없음" : "실행 중");
         row.Sort["status"] = row.Cells["status"];
+        if (p.Suspended || Win32.LastHung.Contains(p.Pid))
+        {
+            row.Fore = Theme.Red;
+        }
+
         row.Cells["cpu"] = FormatPercent(p.CpuPercent);
         row.Sort["cpu"] = p.CpuPercent;
         row.Heat["cpu"] = CpuHeat(p.CpuPercent);

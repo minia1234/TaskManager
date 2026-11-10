@@ -14,7 +14,8 @@ internal sealed record ProcessUsage(
     int Threads,
     int Handles,
     int SessionId,
-    long CreateTime)
+    long CreateTime,
+    bool Suspended = false)
 {
     // 종료 작업이 PID 재사용을 가려내도록 생성 시각과 함께 넘긴다.
     public ProcessKey Key => new(Pid, CreateTime);
@@ -56,7 +57,8 @@ internal readonly record struct ProcessRaw(
     int Threads,
     int Handles,
     int SessionId,
-    long WorkingSetBytes);
+    long WorkingSetBytes,
+    bool Suspended);
 
 internal sealed class CpuSampler
 {
@@ -144,7 +146,7 @@ internal sealed class CpuSampler
             current[key] = new PrevProcess(r.CpuTime, r.IoBytes, r.Name, percent);
             sumProcesses += percent;
             processes.Add(new ProcessUsage(r.Pid, r.ParentPid, r.Name, percent, r.WorkingSetBytes, r.PrivateBytes,
-                disk, r.Threads, r.Handles, r.SessionId, r.CreateTime));
+                disk, r.Threads, r.Handles, r.SessionId, r.CreateTime, r.Suspended));
         }
 
         // 이번 샘플에서 사라진 프로세스 중 직전에 CPU를 쓰던 것은 "최근 종료" 목록에 남긴다.
@@ -250,6 +252,7 @@ internal sealed class CpuSampler
     //   0x38 ImageName.Length, 0x40 ImageName.Buffer, 0x50 UniqueProcessId, 0x58 InheritedFromUniqueProcessId,
     //   0x60 HandleCount, 0x64 SessionId, 0x90 WorkingSetSize, 0xC8 PrivatePageCount,
     //   0xE8 ReadTransferCount, 0xF0 WriteTransferCount
+    // 0x100부터 스레드마다 SYSTEM_THREAD_INFORMATION(0x50바이트): 0x44 ThreadState, 0x48 WaitReason.
     // 이름 버퍼는 같은 메모리 블록 안에 있으므로, 해제 전에 여기서 문자열까지 읽는다.
     private List<ProcessRaw> ReadProcesses()
     {
@@ -285,7 +288,8 @@ internal sealed class CpuSampler
                     Threads: Marshal.ReadInt32(p, 0x04),
                     Handles: Marshal.ReadInt32(p, 0x60),
                     SessionId: Marshal.ReadInt32(p, 0x64),
-                    WorkingSetBytes: Marshal.ReadInt64(p, 0x90)));
+                    WorkingSetBytes: Marshal.ReadInt64(p, 0x90),
+                    Suspended: AllThreadsSuspended(p, Marshal.ReadInt32(p, 0x04))));
 
                 int next = Marshal.ReadInt32(p, 0x00);
                 if (next == 0)
@@ -302,5 +306,25 @@ internal sealed class CpuSampler
         {
             Marshal.FreeHGlobal(buffer);
         }
+    }
+
+    // 작업 관리자와 같은 기준: 모든 스레드가 "대기(5)" 상태이고 대기 이유가 "일시 중단(5)"이면 일시 중단된 프로세스다.
+    private static bool AllThreadsSuspended(IntPtr process, int threads)
+    {
+        if (threads <= 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < threads; i++)
+        {
+            IntPtr t = IntPtr.Add(process, 0x100 + i * 0x50);
+            if (Marshal.ReadInt32(t, 0x44) != 5 || Marshal.ReadInt32(t, 0x48) != 5)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

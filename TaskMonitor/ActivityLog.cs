@@ -167,18 +167,26 @@ internal sealed class AlertRules
     private const double ProcessNetLimit = 10 * 1024 * 1024;
     private const double ProcessUploadLimit = 2 * 1024 * 1024;
     private static readonly TimeSpan NetSustain = TimeSpan.FromSeconds(30);
+    // Windows가 "응답 없음"으로 본 창(5초 무응답)이 10초 더 이어지면 경고한다.
+    private static readonly TimeSpan HangSustain = TimeSpan.FromSeconds(10);
 
     private readonly Dictionary<string, bool> _active = new();
     private readonly Sustained _hotCpu = new(CpuSustain);
     private readonly Sustained _hotNet = new(NetSustain);
     private readonly Sustained _hotUpload = new(NetSustain);
+    private readonly Sustained _hung = new(HangSustain);
+
+    // 경고 제외: 이 이름의 프로그램은 프로세스별 경고(CPU, 네트워크, 업로드, 응답 없음)를 내지 않는다.
+    public IReadOnlySet<string> Excluded { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     private DateTime? _cpuHighSince;
 
     public IReadOnlyList<ActivityEvent> Evaluate(
         DateTime now, Snapshot snapshot, PerfSnapshot perf, IReadOnlyList<GpuDetail> gpus, IReadOnlyDictionary<int, DiskHealthInfo> disks,
-        double? cpuTempC = null, IReadOnlyDictionary<int, NetRate>? rates = null)
+        double? cpuTempC = null, IReadOnlyDictionary<int, NetRate>? rates = null, IReadOnlySet<int>? hung = null)
     {
         var alerts = new List<ActivityEvent>();
+        var excluded = Excluded;
+        var watched = snapshot.Processes.Where(p => !excluded.Contains(p.Name)).ToList();
 
         // CPU 온도: HWiNFO나 Afterburner 공유 메모리로 읽을 수 있을 때만 본다(없으면 경고도 없다).
         if (cpuTempC is { } cpuTemp)
@@ -187,7 +195,7 @@ internal sealed class AlertRules
         }
 
         // 프로세스 하나가 전체 CPU의 50% 이상을 20초 넘게 쓰면 한 번 경고한다. 그 프로세스가 내려가거나 끝나면 다시 울릴 수 있다.
-        foreach (var p in _hotCpu.Fire(now, snapshot.Processes.Where(p => p.CpuPercent >= ProcessCpuLimit)))
+        foreach (var p in _hotCpu.Fire(now, watched.Where(p => p.CpuPercent >= ProcessCpuLimit)))
         {
             alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("프로세스 CPU 급증"),
                 Strings.Fmt("{0}({1}) {2:F0}% (전체 CPU 50% 이상 20초 지속)", p.Name, p.Pid, p.CpuPercent), p.Pid));
@@ -197,7 +205,7 @@ internal sealed class AlertRules
         if (rates is not null)
         {
             NetRate Rate(ProcessUsage p) => rates.GetValueOrDefault(p.Pid) ?? new NetRate(0, 0);
-            foreach (var p in _hotNet.Fire(now, snapshot.Processes.Where(p => Rate(p) is var r && r.SentBytesPerSec + r.ReceivedBytesPerSec >= ProcessNetLimit)))
+            foreach (var p in _hotNet.Fire(now, watched.Where(p => Rate(p) is var r && r.SentBytesPerSec + r.ReceivedBytesPerSec >= ProcessNetLimit)))
             {
                 var r = Rate(p);
                 alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("프로세스 네트워크 과다"),
@@ -205,10 +213,19 @@ internal sealed class AlertRules
                         RowBuilders.FormatRate(r.ReceivedBytesPerSec), RowBuilders.FormatRate(r.SentBytesPerSec)), p.Pid));
             }
 
-            foreach (var p in _hotUpload.Fire(now, snapshot.Processes.Where(p => Rate(p).SentBytesPerSec >= ProcessUploadLimit)))
+            foreach (var p in _hotUpload.Fire(now, watched.Where(p => Rate(p).SentBytesPerSec >= ProcessUploadLimit)))
             {
                 alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("프로세스 업로드 지속"),
                     Strings.Fmt("{0}({1}) 보냄 {2} (2MB/s 이상 30초 지속)", p.Name, p.Pid, RowBuilders.FormatRate(Rate(p).SentBytesPerSec)), p.Pid));
+            }
+        }
+
+        if (hung is not null)
+        {
+            foreach (var p in _hung.Fire(now, watched.Where(p => hung.Contains(p.Pid))))
+            {
+                alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("응답 없음"),
+                    Strings.Fmt("{0}({1}) 15초 넘게 응답 없음", p.Name, p.Pid), p.Pid));
             }
         }
 

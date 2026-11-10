@@ -276,6 +276,7 @@ internal sealed class MainForm : Form
             _worker = new DataWorker(Publish, _perf, _currentPage, _settings.UpdateIntervalMs,
                 _settings.GroupProcesses, _settings.LogEnabled, _settings.ThresholdPercent);
             _worker.SetTree(_settings.ProcessTree);
+            _worker.SetAlertExclusions(_settings.AlertExclusions);
             _worker.Start();
             StartWatchdog();
             _ = UpdateLoopAsync();
@@ -476,6 +477,23 @@ internal sealed class MainForm : Form
             _settings.Save();
         };
         options.DropDownItems.Add(autoUpdate);
+        // 경고 제외 목록: 항목을 누르면 제외를 푼다. 추가는 프로세스 우클릭 > 경고에서 제외.
+        var exclusions = new ToolStripMenuItem(Strings.Localize("경고 제외 목록"));
+        exclusions.DropDownItems.Add(new ToolStripMenuItem("-"));
+        exclusions.DropDownOpening += (_, _) =>
+        {
+            exclusions.DropDownItems.Clear();
+            foreach (string name in _settings.AlertExclusions.Order(StringComparer.OrdinalIgnoreCase).ToList())
+            {
+                exclusions.DropDownItems.Add(new ToolStripMenuItem(name, null, (_, _) => SetAlertExcluded(name, false)) { Checked = true });
+            }
+
+            if (exclusions.DropDownItems.Count == 0)
+            {
+                exclusions.DropDownItems.Add(new ToolStripMenuItem(Strings.Localize("없음 (프로세스 우클릭 > 경고에서 제외)")) { Enabled = false });
+            }
+        };
+        options.DropDownItems.Add(exclusions);
         options.DropDownItems.Add(new ToolStripSeparator());
 
         var speed = new ToolStripMenuItem("업데이트 속도");
@@ -532,6 +550,14 @@ internal sealed class MainForm : Form
 
         var help = new ToolStripMenuItem("도움말");
         help.DropDownItems.Add(Item("업데이트 확인", async () => ShowUpdate(await Updater.CheckAsync(), manual: true)));
+        help.DropDownItems.Add(Item("단축키", () => MessageBox.Show(this,
+            Strings.Localize("Ctrl+Shift+Alt+T   어디서든 TaskMonitor 불러오기") + Environment.NewLine
+            + Strings.Localize("Ctrl+F   검색") + Environment.NewLine
+            + Strings.Localize("Ctrl+1 ~ Ctrl+8   페이지 이동") + Environment.NewLine
+            + Strings.Localize("Delete   선택한 작업 끝내기") + Environment.NewLine
+            + Strings.Localize("Ctrl+N   새 작업 실행") + Environment.NewLine
+            + Strings.Localize("F5   새로 고침"),
+            Strings.Localize("단축키"), MessageBoxButtons.OK, MessageBoxIcon.Information)));
         help.DropDownItems.Add(Item("정보", () => MessageBox.Show(this,
             $"TaskMonitor {Application.ProductVersion.Split('+')[0]}" + Environment.NewLine
             + Strings.Localize("CPU를 누가 쓰는지 찾는 Windows 작업 관리자") + Environment.NewLine + Environment.NewLine
@@ -1090,6 +1116,13 @@ internal sealed class MainForm : Form
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(Item("작업 끝내기", () => EndTarget(target, false)));
         menu.Items.Add(Item("작업 트리 끝내기", () => EndTarget(target, true)));
+        if (target.Name.Equals("explorer.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            menu.Items.Add(Item("Windows 탐색기 다시 시작", () => RestartExplorer(target)));
+        }
+
+        bool suspended = target.Members.All(m => m.Suspended);
+        menu.Items.Add(Item(suspended ? "일시 중단 해제" : "일시 중단", () => SuspendTarget(target, !suspended)));
         menu.Items.Add(new ToolStripSeparator());
 
         var eco = Item("효율성 모드", () => ToggleEco(target));
@@ -1114,6 +1147,9 @@ internal sealed class MainForm : Form
         menu.Items.Add(Item("온라인 검색", () => RunBackground("온라인 검색", () => Attempt(() => ProcessActions.SearchOnline(target.Name)))));
         menu.Items.Add(Item("속성", () => RunBackground("속성 열기", () => Attempt(() => ProcessActions.ShowProperties(ProcessInfoCache.PathOf(first.Pid))))));
         menu.Items.Add(Item("분석 창 열기", () => OpenAnalysis(first.Pid)));
+        var exclude = Item("경고에서 제외", () => SetAlertExcluded(target.Name, !_settings.AlertExclusions.Contains(target.Name, StringComparer.OrdinalIgnoreCase)));
+        exclude.Checked = _settings.AlertExclusions.Contains(target.Name, StringComparer.OrdinalIgnoreCase);
+        menu.Items.Add(exclude);
 
         if (!target.IsGroup)
         {
@@ -1163,6 +1199,65 @@ internal sealed class MainForm : Form
         return menu;
     }
 
+    // 전역 단축키 Ctrl+Shift+Alt+T: 어디서든 TaskMonitor 창을 앞으로 불러온다(트레이에 숨어 있어도).
+    // 다른 프로그램이 이미 쓰고 있으면 등록이 실패하고, 앱 안의 단축키만 쓴다.
+    private const int HotkeyId = 1;
+    private const int WmHotkey = 0x0312;
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Win32.RegisterHotKey(Handle, HotkeyId, 0x1 | 0x2 | 0x4 | 0x4000, (uint)Keys.T); // Alt|Ctrl|Shift|NoRepeat
+    }
+
+    protected override void OnHandleDestroyed(EventArgs e)
+    {
+        Win32.UnregisterHotKey(Handle, HotkeyId);
+        base.OnHandleDestroyed(e);
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WmHotkey && (int)m.WParam == HotkeyId)
+        {
+            RestoreFromTray();
+            return;
+        }
+
+        base.WndProc(ref m);
+    }
+
+    // 앱 안 단축키. 메뉴에 단축키가 붙은 항목(Ctrl+N, F5)은 메뉴가 처리한다.
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == (Keys.Control | Keys.F))
+        {
+            _search.Focus();
+            _search.SelectAll();
+            return true;
+        }
+
+        if (keyData == Keys.Escape && _search.Focused && _search.TextLength > 0)
+        {
+            _search.Clear();
+            return true;
+        }
+
+        if (keyData >= (Keys.Control | Keys.D1) && keyData <= (Keys.Control | Keys.D8))
+        {
+            ShowPage((int)(keyData & Keys.KeyCode) - (int)Keys.D1);
+            return true;
+        }
+
+        if (keyData == Keys.Delete && !_search.Focused && _currentPage is PageProcesses or PageDetails)
+        {
+            EndSelected(false);
+            return true;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
     private void EndSelected(bool tree)
     {
         var page = _currentPage == PageDetails ? _details : _processes;
@@ -1171,6 +1266,68 @@ internal sealed class MainForm : Form
         {
             EndTarget(target, tree);
         }
+    }
+
+    // 경고 제외는 프로세스별 경고(CPU, 네트워크, 업로드, 응답 없음)에만 걸린다. 전체 CPU·온도 경고는 그대로 울린다.
+    private void SetAlertExcluded(string name, bool excluded)
+    {
+        _settings.AlertExclusions.RemoveAll(n => n.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (excluded)
+        {
+            _settings.AlertExclusions.Add(name);
+        }
+
+        _settings.Save();
+        _worker?.SetAlertExclusions(_settings.AlertExclusions);
+    }
+
+    private void SuspendTarget(ProcTarget target, bool suspend)
+    {
+        string title = Strings.Localize(suspend ? "일시 중단" : "일시 중단 해제");
+        if (suspend && MessageBox.Show(this,
+                Strings.Fmt("{0}을(를) 일시 중단하시겠습니까?", target.Name) + Environment.NewLine
+                + Strings.Localize("시스템 프로세스를 멈추면 Windows가 응답하지 않을 수 있습니다. 해제하려면 다시 우클릭하세요."),
+                title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+        {
+            return;
+        }
+
+        RunBackground(title, () => CollectErrors(target, m => ProcessActions.Suspend(m.Key, suspend)));
+    }
+
+    // 끝낸 뒤 Windows가 셸을 스스로 다시 띄우는 경우가 많다. 3초 안에 안 뜨면 직접 띄운다(둘 다 띄우면 탐색기 창이 하나 더 열린다).
+    private void RestartExplorer(ProcTarget target)
+    {
+        static bool Running()
+        {
+            var found = Process.GetProcessesByName("explorer");
+            foreach (var p in found)
+            {
+                p.Dispose();
+            }
+
+            return found.Length > 0;
+        }
+
+        RunBackground("Windows 탐색기 다시 시작", () =>
+        {
+            if (CollectErrors(target, m => ProcessActions.EndTask(m.Key)) is { } error)
+            {
+                return error;
+            }
+
+            for (int i = 0; i < 30 && !Running(); i++)
+            {
+                Thread.Sleep(100);
+            }
+
+            if (!Running())
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe") { UseShellExecute = true })?.Dispose();
+            }
+
+            return null;
+        });
     }
 
     private void EndTarget(ProcTarget target, bool tree)

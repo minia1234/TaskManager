@@ -84,6 +84,29 @@ internal static class ProcessActions
         }
     }
 
+    // 일시 중단과 다시 시작: 모든 스레드를 멈추거나 풀어 준다. 끝내기처럼 생성 시각을 먼저 확인한다.
+    internal static void Suspend(ProcessKey key, bool suspend)
+    {
+        if (key.Pid == Environment.ProcessId)
+        {
+            throw new InvalidOperationException("Task Monitor 자신은 일시 중단할 수 없습니다.");
+        }
+
+        IntPtr handle = OpenVerified(key, Win32.ProcessSuspendResume);
+        try
+        {
+            int status = suspend ? Win32.NtSuspendProcess(handle) : Win32.NtResumeProcess(handle);
+            if (status < 0)
+            {
+                throw new Win32Exception(Win32.RtlNtStatusToDosError(status));
+            }
+        }
+        finally
+        {
+            Win32.CloseHandle(handle);
+        }
+    }
+
     // 자식 프로세스를 먼저 끝내고 대상을 끝낸다. 자식은 같은 PID의 부모보다 나중에 만들어진 것만 자식으로 본다(PID 재사용 방지).
     // 실패한 개수를 돌려준다.
     internal static int EndTree(ProcessUsage root, IReadOnlyList<ProcessUsage> all)

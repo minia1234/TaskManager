@@ -9,6 +9,7 @@ internal static class Win32
     internal const uint ProcessTerminate = 0x0001;
     internal const uint ProcessVmRead = 0x0010;
     internal const uint ProcessSetInformation = 0x0200;
+    internal const uint ProcessSuspendResume = 0x0800;
     internal const uint ProcessQueryInformation = 0x0400;
     internal const uint ProcessQueryLimitedInformation = 0x1000;
 
@@ -193,6 +194,24 @@ internal static class Win32
     private static extern bool IsWindowVisible(IntPtr hwnd);
 
     [DllImport("user32.dll")]
+    private static extern bool IsHungAppWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool RegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint key);
+
+    [DllImport("user32.dll")]
+    internal static extern bool UnregisterHotKey(IntPtr hwnd, int id);
+
+    [DllImport("ntdll.dll")]
+    internal static extern int NtSuspendProcess(IntPtr process);
+
+    [DllImport("ntdll.dll")]
+    internal static extern int NtResumeProcess(IntPtr process);
+
+    [DllImport("ntdll.dll")]
+    internal static extern int RtlNtStatusToDosError(int status);
+
+    [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr hwnd);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -274,6 +293,27 @@ internal static class Win32
             && rect.Right - rect.Left >= GetSystemMetrics(SmCxScreen)
             && rect.Bottom - rect.Top >= GetSystemMetrics(SmCyScreen);
         return ((int)pid, fullscreen);
+    }
+
+    // 보이는 창이 "응답 없음"인 프로세스들. Windows는 창이 5초 넘게 메시지를 처리하지 않으면 응답 없음으로 본다.
+    // 마지막으로 찾은 결과는 프로세스 목록의 상태 열이 쓴다.
+    internal static IReadOnlySet<int> LastHung { get; private set; } = new HashSet<int>();
+
+    internal static IReadOnlySet<int> HungWindowProcesses()
+    {
+        var hung = new HashSet<int>();
+        EnumWindows((hwnd, _) =>
+        {
+            if (IsWindowVisible(hwnd) && IsHungAppWindow(hwnd))
+            {
+                GetWindowThreadProcessId(hwnd, out uint pid);
+                hung.Add((int)pid);
+            }
+
+            return true;
+        }, IntPtr.Zero);
+        LastHung = hung;
+        return hung;
     }
 
     // 현재 프로세스 PID의 창 중 보이는 첫 창을 찾는다.

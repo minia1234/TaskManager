@@ -125,6 +125,9 @@ internal sealed class DataWorker : IDisposable
     }
 
     // 프로세스 목록을 트리(부모 아래 자식)로 보여 줄지. 켜면 "이름별 합산"은 적용되지 않는다.
+    public void SetAlertExclusions(IEnumerable<string> names) =>
+        _alerts.Excluded = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+
     public void SetTree(bool tree)
     {
         _tree = tree;
@@ -301,7 +304,7 @@ internal sealed class DataWorker : IDisposable
         var frames = _etw.Frames(now);
         var rates = _etw.Rates(now);
         var alerts = _alerts.Evaluate(now, snap, perf, gpus, DiskHealthMonitor.Latest, cpuTemp,
-            _etw.State == EtwState.Running ? rates : null);
+            _etw.State == EtwState.Running ? rates : null, Win32.HungWindowProcesses());
         EtwLatest.Publish(frames, rates, _etw.Totals(), _etw.State, _etw.Status);
         var games = _games.Update(now, snap, perf, gpus, frames, Win32.ForegroundWindowState());
         var recorded = new List<ActivityEvent>(events.Count + alerts.Count + games.Count);
