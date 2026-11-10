@@ -19,6 +19,13 @@ dotnet publish TaskMonitor -c Release -p:PublishProfile=win-x64
 
 배포 전에 `dist/TaskMonitor.exe`만 빈 폴더에 복사해 자체 검증을 돌려, 단일 파일이 스스로 완결되는지 확인합니다.
 
+자동 업데이트는 GitHub의 최신 Release를 읽습니다. 그래서 새 버전을 낼 때 다음을 지킵니다.
+
+- `TaskMonitor.csproj`의 `<Version>`을 올리고, Release 태그를 `v<같은 버전>`으로 붙입니다. 태그가 실행 중인 버전보다 높아야 받습니다.
+- 파일 이름은 `TaskMonitor.exe` 그대로 올립니다. GitHub가 올린 파일마다 SHA-256(`digest`)을 붙이고, 앱은 이 값이 맞을 때만 바꿔 넣습니다.
+- 이 해시는 전송 중 손상만 막습니다. 저장소 계정이 털리면 악성 파일도 해시가 맞습니다. 코드 서명을 하게 되면 받은 파일이 같은 게시자로 서명됐는지도 확인해야 합니다.
+- 받는 쪽 동작은 환경 변수 `TASKMONITOR_UPDATE_API`로 가짜 Release JSON 주소를 주어 시험합니다(자체 검증이 localhost로 이렇게 합니다).
+
 아이콘은 `tools/make-icon.ps1`이 그립니다. 바꾸려면 스크립트를 고친 뒤 다시 실행합니다.
 
 ```bash

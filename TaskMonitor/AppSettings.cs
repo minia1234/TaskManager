@@ -18,6 +18,7 @@ internal sealed class AppSettings
     public string Language { get; set; } =
         System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ko" ? "ko" : "en";
     public bool CloseToTray { get; set; }                  // X 단추로 끄지 않고 트레이에 숨기기
+    public bool AutoUpdate { get; set; } = true;           // 시작할 때와 하루 한 번 GitHub Release 확인
     public Dictionary<string, List<string>> Columns { get; set; } = new();
 
     private static string FilePath => Path.Combine(

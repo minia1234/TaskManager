@@ -103,6 +103,9 @@ internal sealed class MainForm : Form
     // 메뉴의 "종료"처럼 정말 끝낼 때 켠다. 꺼져 있으면 X 단추는 설정에 따라 트레이로 숨긴다.
     private bool _exiting;
     private string? _lastNotifiedAlert;
+    private ToolStripMenuItem? _updateItem;      // 새 버전이 있으면 메뉴 줄 오른쪽에 뜬다
+    private bool _updateStaged;                  // 새 exe를 이미 놓았다. 다시 받지 않는다
+    private bool _updateBalloon;                 // 마지막 트레이 알림이 업데이트 알림이다
 
     private int _currentPage = PageProcesses;
     private Snapshot? _last;
@@ -274,6 +277,7 @@ internal sealed class MainForm : Form
             _worker.SetTree(_settings.ProcessTree);
             _worker.Start();
             StartWatchdog();
+            _ = UpdateLoopAsync();
             _activateWait = ThreadPool.RegisterWaitForSingleObject(_activate, (_, _) =>
             {
                 try
@@ -462,6 +466,15 @@ internal sealed class MainForm : Form
             autoStart.Checked = AutoStart.IsEnabled();
         };
         options.DropDownItems.Add(autoStart);
+        var autoUpdate = Item("자동 업데이트", () => { });
+        autoUpdate.CheckOnClick = true;
+        autoUpdate.Checked = _settings.AutoUpdate;
+        autoUpdate.Click += (_, _) =>
+        {
+            _settings.AutoUpdate = autoUpdate.Checked;
+            _settings.Save();
+        };
+        options.DropDownItems.Add(autoUpdate);
         options.DropDownItems.Add(new ToolStripSeparator());
 
         var speed = new ToolStripMenuItem("업데이트 속도");
@@ -517,6 +530,7 @@ internal sealed class MainForm : Form
         records.DropDownItems.Add(Item("기록 폴더 열기", OpenRecordsFolder));
 
         var help = new ToolStripMenuItem("도움말");
+        help.DropDownItems.Add(Item("업데이트 확인", async () => ShowUpdate(await Updater.CheckAsync(), manual: true)));
         help.DropDownItems.Add(Item("정보", () => MessageBox.Show(this,
             $"TaskMonitor {Application.ProductVersion.Split('+')[0]}" + Environment.NewLine
             + Strings.Localize("CPU를 누가 쓰는지 찾는 Windows 작업 관리자") + Environment.NewLine + Environment.NewLine
@@ -540,6 +554,12 @@ internal sealed class MainForm : Form
         // 경고 알림을 누르면 이벤트 페이지를 연다.
         _tray.BalloonTipClicked += (_, _) =>
         {
+            if (_updateBalloon)
+            {
+                RestartForUpdate();
+                return;
+            }
+
             RestoreFromTray();
             ShowPage(PageEvents);
         };
@@ -559,6 +579,90 @@ internal sealed class MainForm : Form
         {
             _worker?.RequestPage(_currentPage);
         }
+    }
+
+    // 시작할 때와 하루 한 번 새 버전을 확인한다. 끄면 확인만 건너뛰고, 도움말 > 업데이트 확인은 그대로 된다.
+    private async Task UpdateLoopAsync()
+    {
+        while (!_closing)
+        {
+            Updater.CleanupOld();
+            if (_settings.AutoUpdate && !_updateStaged)
+            {
+                ShowUpdate(await Updater.CheckAsync());
+            }
+
+            await Task.Delay(TimeSpan.FromDays(1));
+        }
+    }
+
+    private void ShowUpdate(Updater.Result result, bool manual = false)
+    {
+        if (_closing || _updateStaged)
+        {
+            return;
+        }
+
+        switch (result.Outcome)
+        {
+            case Updater.Outcome.Staged:
+                _updateStaged = true;
+                string ready = Strings.Fmt("새 버전 {0} 준비됨 — 지금 다시 시작", result.Latest);
+                SetUpdateItem(ready, RestartForUpdate);
+                if (manual)
+                {
+                    if (MessageBox.Show(this, ready + "?", "TaskMonitor", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+                    {
+                        RestartForUpdate();
+                    }
+                }
+                else if (!Visible && _tray.Visible)
+                {
+                    _updateBalloon = true;
+                    _tray.ShowBalloonTip(10000, "TaskMonitor", ready, ToolTipIcon.Info);
+                }
+
+                break;
+            case Updater.Outcome.Manual:
+                SetUpdateItem(Strings.Fmt("새 버전 {0} 받기", result.Latest), OpenReleasesPage);
+                if (manual)
+                {
+                    MessageBox.Show(this, Strings.Fmt("새 버전 {0}이 있습니다. 이 폴더에는 자동으로 바꿔 넣을 수 없어 Release 페이지를 엽니다.", result.Latest),
+                        "TaskMonitor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    OpenReleasesPage();
+                }
+
+                break;
+            case Updater.Outcome.UpToDate when manual:
+                MessageBox.Show(this, Strings.Fmt("최신 버전입니다 ({0}).", Updater.Current), "TaskMonitor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                break;
+            case Updater.Outcome.Failed when manual:
+                MessageBox.Show(this, Strings.Fmt("업데이트를 확인하지 못했습니다: {0}", result.Detail), "TaskMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                break;
+        }
+    }
+
+    private void SetUpdateItem(string text, Action action)
+    {
+        if (_updateItem is not null)
+        {
+            _menu.Items.Remove(_updateItem);
+        }
+
+        _updateItem = new ToolStripMenuItem(text) { Alignment = ToolStripItemAlignment.Right };
+        _updateItem.Font = new Font(_updateItem.Font, FontStyle.Bold);
+        _updateItem.Click += (_, _) => action();
+        _menu.Items.Add(_updateItem);
+    }
+
+    private static void OpenReleasesPage() =>
+        Process.Start(new ProcessStartInfo(Updater.ReleasesPage) { UseShellExecute = true });
+
+    // 새 exe는 이미 제자리에 있다. 같은 경로로 새로 띄우고 이 창은 끝낸다(새 프로세스는 --restarted로 단일 실행 잠금을 기다린다).
+    private void RestartForUpdate()
+    {
+        Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = true, Arguments = "--restarted" });
+        ExitApp();
     }
 
     private void ExitApp()
@@ -844,6 +948,7 @@ internal sealed class MainForm : Form
                 // 트레이에 숨어 있을 때는 아무도 상태 바를 보지 않으므로 새 경고를 알림으로 띄운다(같은 경고는 한 번만).
                 if (alert != _lastNotifiedAlert && AppState.Background && _tray.Visible)
                 {
+                    _updateBalloon = false;
                     _tray.ShowBalloonTip(10000, "TaskMonitor", alert, ToolTipIcon.Warning);
                 }
 

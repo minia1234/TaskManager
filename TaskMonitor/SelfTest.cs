@@ -905,7 +905,80 @@ internal static class SelfTest
             }
         }
 
+        CheckUpdater(Check);
         return Finish(outPath, log, failures);
+    }
+
+    // 자동 업데이트: localhost에 가짜 Release를 띄워 받기·해시 확인·교체를 실제 파일로 확인한다(GitHub에는 접속하지 않는다).
+    private static void CheckUpdater(Action<string, bool, string> check)
+    {
+        check("버전 해석", Updater.ParseVersion("v1.2.3") == new Version(1, 2, 3) && Updater.ParseVersion("1.0.0+abc") == new Version(1, 0, 0)
+            && Updater.ParseVersion("latest") is null, $"현재 {Updater.Current}");
+
+        string dir = Path.Combine(Path.GetTempPath(), "TaskMonitor-UpdateTest-" + Environment.ProcessId);
+        Directory.CreateDirectory(dir);
+        int port = 18000 + Environment.ProcessId % 1000;
+        string prefix = $"http://localhost:{port}/";
+        byte[] payload = Encoding.ASCII.GetBytes("new build " + Guid.NewGuid());
+        string tag = "v99.0.0", digest = "sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload));
+        using var server = new System.Net.HttpListener();
+        server.Prefixes.Add(prefix);
+        try
+        {
+            server.Start();
+            _ = Task.Run(() =>
+            {
+                while (server.IsListening)
+                {
+                    var ctx = server.GetContext();
+                    byte[] body = ctx.Request.Url!.AbsolutePath.EndsWith(".exe") ? payload : Encoding.UTF8.GetBytes(
+                        $$"""{"tag_name":"{{tag}}","assets":[{"name":"TaskMonitor.exe","browser_download_url":"{{prefix}}TaskMonitor.exe","digest":"{{digest}}"}]}""");
+                    ctx.Response.OutputStream.Write(body);
+                    ctx.Response.Close();
+                }
+            });
+            Environment.SetEnvironmentVariable("TASKMONITOR_UPDATE_API", prefix + "latest");
+            string exe = Path.Combine(dir, "TaskMonitor.exe");
+            Updater.Result Run()
+            {
+                File.WriteAllText(exe, "old build");
+                File.Delete(exe + ".old");
+                return Task.Run(() => Updater.CheckAsync(exe)).Result;
+            }
+
+            var staged = Run();
+            check("업데이트 받기·해시 확인·교체", staged.Outcome == Updater.Outcome.Staged && File.ReadAllBytes(exe).SequenceEqual(payload)
+                && File.ReadAllText(exe + ".old") == "old build" && !File.Exists(exe + ".new"), $"{staged.Outcome} {staged.Latest} {staged.Detail}");
+
+            digest = "sha256:" + new string('0', 64);
+            var bad = Run();
+            check("해시가 틀리면 바꾸지 않음", bad is { Outcome: Updater.Outcome.Failed, Detail: "hash-mismatch" }
+                && File.ReadAllText(exe) == "old build" && !File.Exists(exe + ".new"), $"{bad.Outcome} {bad.Detail}");
+
+            File.WriteAllText(Path.Combine(dir, "TaskMonitor.dll"), "");
+            var dev = Run();
+            check("개발 빌드는 바꾸지 않음", dev.Outcome == Updater.Outcome.Manual && File.ReadAllText(exe) == "old build", $"{dev.Outcome} {dev.Detail}");
+
+            tag = "v0.0.1";
+            var same = Run();
+            check("새 버전이 없으면 그대로", same.Outcome == Updater.Outcome.UpToDate, $"{same.Outcome} {same.Latest}");
+        }
+        catch (Exception ex)
+        {
+            check("자동 업데이트 검사", false, ex.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TASKMONITOR_UPDATE_API", null);
+            server.Close();
+            try
+            {
+                Directory.Delete(dir, true);
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 
     // IconCache는 백그라운드에서 추출하므로 준비될 때까지 잠시 기다린다(최대 8초).

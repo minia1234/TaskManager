@@ -45,6 +45,8 @@ Alert limits are GPU 85°C, GPU memory junction 100°C, disk 70°C, CPU 95°C, m
 2. Run it. If Windows shows "Windows protected your PC", choose "More info" and then "Run anyway" (the build is not code-signed yet).
 3. For background recording, turn on **Options > Start with Windows** and **Options > Close button hides to tray**. TaskMonitor then starts as a tray icon with no window.
 
+When a new version comes out, TaskMonitor downloads it, checks it against the SHA-256 published on GitHub, and puts it in place. Choose "restart now" at the right of the menu bar, or it takes effect on the next start. If the exe sits in a folder it cannot write to, such as Program Files, choose "Get version" to download it from the Releases page.
+
 Only one copy runs at a time. Starting it again brings the open window to the front.
 
 ## Requirements
@@ -61,7 +63,7 @@ Windows 11 x64 (tested) or Windows 10 x64 (supported, not yet tested). No admini
 
 ## Privacy and records
 
-TaskMonitor sends nothing over the network. All records live in `%LOCALAPPDATA%\TaskMonitor`.
+TaskMonitor contacts only GitHub (api.github.com, and the release file on github.com when a new version exists) to check for updates. It sends no usage records. It checks at startup and once a day; turn off **Options > Automatic updates** to stop it. All records live in `%LOCALAPPDATA%\TaskMonitor`.
 
 | File | Contents |
 |---|---|
