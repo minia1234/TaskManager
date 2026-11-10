@@ -545,6 +545,7 @@ internal sealed class MainForm : Form
         records.DropDownItems.Add(Item("원인 분석 리포트 만들기 (최근 1시간)", CreateCauseReport));
         records.DropDownItems.Add(Item("기록 내보내기 (CSV)...", ExportRecords));
         records.DropDownItems.Add(Item("기록 비교...", OpenComparison));
+        records.DropDownItems.Add(Item("기록 타임라인...", OpenTimeline));
         records.DropDownItems.Add(new ToolStripSeparator());
         records.DropDownItems.Add(Item("기록 폴더 열기", OpenRecordsFolder));
 
@@ -1533,6 +1534,17 @@ internal sealed class MainForm : Form
         _alertsButton.Checked = _alertsOnlyOn;
         _alertsButton.Text = Strings.Localize(_alertsOnlyOn ? "모두 보기" : "경고만 보기");
         _worker?.SetAlertsOnly(_alertsOnlyOn);
+    }
+
+    private void OpenTimeline()
+    {
+        if (_worker is not { } worker)
+        {
+            MessageBox.Show(this, Strings.Localize("아직 기록을 모으는 중입니다. 잠시 뒤에 다시 시도하세요."), Strings.Localize("기록 타임라인"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        new RecordTimelineForm(worker.Resources, worker.Activity).Show(this);
     }
 
     private void OpenComparison()

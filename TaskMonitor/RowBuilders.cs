@@ -252,7 +252,7 @@ internal static class RowBuilders
         return rows;
     }
 
-    private static string KindLabel(string kind) => kind switch
+    internal static string KindLabel(string kind) => kind switch
     {
         ActivityLog.Start => Strings.Localize("시작"),
         ActivityLog.Exit => Strings.Localize("종료"),
