@@ -567,7 +567,7 @@ internal sealed class MainForm : Form
         records.DropDownItems.Add(Item("기록 폴더 열기", OpenRecordsFolder));
 
         var help = new ToolStripMenuItem("도움말");
-        help.DropDownItems.Add(Item("업데이트 확인", async () => ShowUpdate(await Updater.CheckAsync(), manual: true)));
+        help.DropDownItems.Add(Item("업데이트 확인", async () => ShowUpdate(await CheckForUpdateAsync(), manual: true)));
         help.DropDownItems.Add(Item("단축키", () => MessageBox.Show(this,
             Strings.Localize("Ctrl+Shift+Alt+T   어디서든 TaskMonitor 불러오기") + Environment.NewLine
             + Strings.Localize("Ctrl+F   검색") + Environment.NewLine
@@ -634,16 +634,39 @@ internal sealed class MainForm : Form
             Updater.CleanupOld();
             if (_settings.AutoUpdate && !_updateStaged)
             {
-                ShowUpdate(await Updater.CheckAsync());
+                ShowUpdate(await CheckForUpdateAsync());
             }
 
             await Task.Delay(TimeSpan.FromDays(1));
         }
     }
 
+    // 확인은 한 번에 하나만 돈다(겹치면 두 번째가 .new 파일을 못 열어 엉뚱한 안내를 낸다). 이미 바꿔 두었으면 다시 받지 않는다.
+    private Task<Updater.Result>? _updateCheck;
+
+    private async Task<Updater.Result> CheckForUpdateAsync()
+    {
+        if (_updateStaged)
+        {
+            return new Updater.Result(Updater.Outcome.Staged, _stagedVersion);
+        }
+
+        _updateCheck ??= Updater.CheckAsync();
+        try
+        {
+            return await _updateCheck;
+        }
+        finally
+        {
+            _updateCheck = null;
+        }
+    }
+
+    private Version? _stagedVersion;
+
     private void ShowUpdate(Updater.Result result, bool manual = false)
     {
-        if (_closing || _updateStaged)
+        if (_closing || (_updateStaged && !manual))
         {
             return;
         }
@@ -652,6 +675,7 @@ internal sealed class MainForm : Form
         {
             case Updater.Outcome.Staged:
                 _updateStaged = true;
+                _stagedVersion = result.Latest;
                 string ready = Strings.Fmt("새 버전 {0} 준비됨 — 지금 다시 시작", result.Latest);
                 SetUpdateItem(ready, RestartForUpdate);
                 if (manual)
@@ -1322,7 +1346,9 @@ internal sealed class MainForm : Form
             return;
         }
 
-        RunBackground(title, () => CollectErrors(target, m => ProcessActions.Suspend(m.Key, suspend)));
+        // 이미 그 상태인 멤버는 건너뛴다. 일시 중단은 횟수가 쌓여서, 두 번 멈춘 프로세스는 한 번 풀어서는 안 풀린다.
+        var members = target.Members.Where(m => m.Suspended != suspend).ToList();
+        RunBackground(title, () => CollectErrors(target with { Members = members }, m => ProcessActions.Suspend(m.Key, suspend)));
     }
 
     // 끝낸 뒤 Windows가 셸을 스스로 다시 띄우는 경우가 많다. 3초 안에 안 뜨면 직접 띄운다(둘 다 띄우면 탐색기 창이 하나 더 열린다).
@@ -1330,13 +1356,16 @@ internal sealed class MainForm : Form
     {
         static bool Running()
         {
+            // 다른 사용자 세션의 탐색기는 세지 않는다.
+            int session = Process.GetCurrentProcess().SessionId;
             var found = Process.GetProcessesByName("explorer");
+            bool mine = found.Any(p => p.SessionId == session);
             foreach (var p in found)
             {
                 p.Dispose();
             }
 
-            return found.Length > 0;
+            return mine;
         }
 
         RunBackground("Windows 탐색기 다시 시작", () =>
@@ -1508,14 +1537,23 @@ internal sealed class MainForm : Form
         {
             _mini = new MiniWindow(RestoreFromTray, () => SetMiniWindow(false));
             _mini.PlaceAt(_settings.MiniX, _settings.MiniY);
+            // Alt+F4로 닫혀도 메뉴 체크와 설정이 따라가게 한다.
+            _mini.FormClosed += (_, _) =>
+            {
+                if (_mini is not null && !_closing)
+                {
+                    SetMiniWindow(false);
+                }
+            };
             _mini.Show();
         }
         else if (!show && _mini is not null)
         {
-            _settings.MiniX = _mini.Left;
-            _settings.MiniY = _mini.Top;
-            _mini.Close();
+            var mini = _mini;
             _mini = null;
+            _settings.MiniX = mini.Left;
+            _settings.MiniY = mini.Top;
+            mini.Close();
         }
 
         _settings.Save();

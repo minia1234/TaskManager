@@ -94,6 +94,25 @@ internal static class StartupItems
 
                 foreach (dynamic task in folder.GetTasks(1)) // 1 = 숨은 작업 포함
                 {
+                    try
+                    {
+                        AddTask(task);
+                    }
+                    catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException or Microsoft.CSharp.RuntimeBinder.RuntimeBinderException)
+                    {
+                        // 손상되었거나 읽을 수 없는 작업 하나 때문에 나머지를 놓치지 않는다.
+                    }
+                }
+
+                foreach (dynamic sub in folder.GetFolders(0))
+                {
+                    Walk(sub);
+                }
+            }
+
+            void AddTask(dynamic task)
+            {
+                {
                     dynamic definition = task.Definition;
                     bool atStart = false;
                     foreach (dynamic trigger in definition.Triggers)
@@ -106,7 +125,7 @@ internal static class StartupItems
                     {
                         if ((int)action.Type == 0) // 0 = 프로그램 실행
                         {
-                            command = $"\"{Environment.ExpandEnvironmentVariables((string)action.Path)}\" {action.Arguments}".TrimEnd();
+                            command = $"\"{Environment.ExpandEnvironmentVariables((string?)action.Path ?? "")}\" {action.Arguments}".TrimEnd();
                             break;
                         }
                     }
@@ -115,11 +134,6 @@ internal static class StartupItems
                     {
                         rows.Add(new StartupRow((string)task.Name, command, PublisherOf(command), (bool)task.Enabled, RegistryHive.CurrentUser, (string)task.Path));
                     }
-                }
-
-                foreach (dynamic sub in folder.GetFolders(0))
-                {
-                    Walk(sub);
                 }
             }
 

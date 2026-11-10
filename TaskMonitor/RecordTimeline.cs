@@ -106,7 +106,19 @@ internal sealed class RecordTimelineForm : Form
         int version = ++_loadVersion;
         DateTime from = _end - _span, to = _end;
         _range.Text = $"{from:MM-dd HH:mm} ~ {to:MM-dd HH:mm}   " + Strings.Localize("읽는 중...");
-        var (samples, events) = await Task.Run(() => (_resources.ReadRange(from, to), _activity.ReadRange(from, to)));
+        IReadOnlyList<ResourceSample> samples;
+        IReadOnlyList<ActivityEvent> events;
+        try
+        {
+            (samples, events) = await Task.Run(() => (_resources.ReadRange(from, to), _activity.ReadRange(from, to)));
+        }
+        catch (IOException ex)
+        {
+            // 기록 파일이 막 회전(.1로 이동)되는 순간이면 못 읽을 수 있다. 다시 누르면 된다.
+            _range.Text = ex.Message;
+            return;
+        }
+
         if (version != _loadVersion || IsDisposed)
         {
             return;

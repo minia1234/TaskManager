@@ -970,18 +970,19 @@ internal static class SelfTest
         return Finish(outPath, log, failures);
     }
 
-    // 응답 없음 감지: 화면 밖에 창을 하나 띄우고 그 스레드가 7초 동안 메시지를 처리하지 않게 한다.
+    // 응답 없음 감지: 화면에 작은 창을 띄우고 그 스레드가 18초 동안 메시지를 처리하지 않게 한다.
+    // 16초 시점도 본다. 그때쯤 Windows가 원래 창을 "응답 없음" 유령 창으로 바꿔도 계속 잡혀야 15초 경고가 울린다.
     private static void CheckHungWindow(Action<string, bool, string> check)
     {
-        bool before = false, during = false;
+        bool before = false, during = false, later = false;
         using var shown = new ManualResetEventSlim();
         var thread = new Thread(() =>
         {
-            using var form = new Form { StartPosition = FormStartPosition.Manual, Location = new System.Drawing.Point(-3000, -3000), ShowInTaskbar = false, Text = "hang test" };
+            using var form = new Form { StartPosition = FormStartPosition.Manual, Location = new System.Drawing.Point(0, 0), Size = new System.Drawing.Size(160, 80), ShowInTaskbar = false, Text = "hang test" };
             form.Show();
             Application.DoEvents();
             shown.Set();
-            Thread.Sleep(7000);
+            Thread.Sleep(18000);
             Application.DoEvents();
         });
         thread.SetApartmentState(ApartmentState.STA);
@@ -990,8 +991,10 @@ internal static class SelfTest
         before = Win32.HungWindowProcesses().Contains(Environment.ProcessId);
         Thread.Sleep(6500);
         during = Win32.HungWindowProcesses().Contains(Environment.ProcessId);
+        Thread.Sleep(9500);
+        later = Win32.HungWindowProcesses().Contains(Environment.ProcessId);
         thread.Join();
-        check("응답 없음 창 감지(5초 넘게 메시지 처리 안 함)", !before && during, $"처음 {before}, 6.5초 뒤 {during}");
+        check("응답 없음 창 감지(5초 넘게 메시지 처리 안 함)", !before && during && later, $"처음 {before}, 6.5초 뒤 {during}, 16초 뒤 {later}");
     }
 
     // 자동 업데이트: localhost에 가짜 Release를 띄워 받기·해시 확인·교체를 실제 파일로 확인한다(GitHub에는 접속하지 않는다).
@@ -1022,7 +1025,7 @@ internal static class SelfTest
                     ctx.Response.Close();
                 }
             });
-            Environment.SetEnvironmentVariable("TASKMONITOR_UPDATE_API", prefix + "latest");
+            Updater.TestApiUrl = prefix + "latest";
             string exe = Path.Combine(dir, "TaskMonitor.exe");
             Updater.Result Run()
             {
@@ -1054,7 +1057,7 @@ internal static class SelfTest
         }
         finally
         {
-            Environment.SetEnvironmentVariable("TASKMONITOR_UPDATE_API", null);
+            Updater.TestApiUrl = null;
             server.Close();
             try
             {

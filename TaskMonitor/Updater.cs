@@ -22,8 +22,13 @@ internal static class Updater
 
     public static Version Current => ParseVersion(System.Windows.Forms.Application.ProductVersion) ?? new Version(0, 0);
 
-    // 자체 검증이 가짜 Release를 가리키게 할 때만 쓴다.
-    private static string ApiUrl => Environment.GetEnvironmentVariable("TASKMONITOR_UPDATE_API") ?? LatestApi;
+    // 자체 검증만 가짜 Release(localhost)를 가리킨다. 실행 중인 앱은 환경 변수를 보지 않는다(받을 exe를 바꿔치기 못 하게).
+    internal static string? TestApiUrl { get; set; }
+
+    private static string ApiUrl => TestApiUrl ?? LatestApi;
+
+    // 받는 중 연결이 멈춰도 확인이 영원히 묶이지 않게 전체 작업에 시간 제한을 둔다.
+    private static readonly TimeSpan CheckTimeout = TimeSpan.FromMinutes(10);
 
     public static Version? ParseVersion(string? text)
     {
@@ -52,8 +57,10 @@ internal static class Updater
         }
     }
 
-    public static async Task<Result> CheckAsync(string? exePath = null, CancellationToken cancel = default)
+    public static async Task<Result> CheckAsync(string? exePath = null)
     {
+        using var timeout = new CancellationTokenSource(CheckTimeout);
+        var cancel = timeout.Token;
         try
         {
             using var doc = JsonDocument.Parse(await Http.GetStringAsync(ApiUrl, cancel));
@@ -119,11 +126,17 @@ internal static class Updater
             }
             catch
             {
-                File.Move(exePath + ".old", exePath);
+                // 실행 중인 이미지(.old)는 옮길 수 없을 수도 있지만 복사는 된다. 어느 경우든 원래 이름의 exe를 남긴다.
+                File.Copy(exePath + ".old", exePath, overwrite: true);
                 throw;
             }
 
             return new Result(Outcome.Staged, latest);
+        }
+        catch (Exception ex) when (ex is HttpIOException)
+        {
+            // 받는 중 연결이 끊겼다. 폴더 문제가 아니니 다음 확인에서 다시 받는다.
+            return new Result(Outcome.Failed, latest, ex.Message);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -220,10 +220,17 @@ internal sealed class AlertRules
                     Strings.Fmt("{0}({1}) 보냄 {2} (2MB/s 이상 30초 지속)", p.Name, p.Pid, RowBuilders.FormatRate(Rate(p).SentBytesPerSec)), p.Pid));
             }
         }
+        else
+        {
+            // 측정이 끊긴 동안의 시작 시각을 남겨 두면 다시 켜지는 순간 30초를 기다리지 않고 울린다.
+            _hotNet.Fire(now, Array.Empty<ProcessUsage>());
+            _hotUpload.Fire(now, Array.Empty<ProcessUsage>());
+        }
 
         if (hung is not null)
         {
-            foreach (var p in _hung.Fire(now, watched.Where(p => hung.Contains(p.Pid))))
+            // 일시 중단된 프로세스의 창도 응답 없음이 되지만, 사용자가 멈춘 것이라 경고하지 않는다.
+            foreach (var p in _hung.Fire(now, watched.Where(p => !p.Suspended && hung.Contains(p.Pid))))
             {
                 alerts.Add(new ActivityEvent(now, ActivityLog.Alert, Strings.Localize("응답 없음"),
                     Strings.Fmt("{0}({1}) 15초 넘게 응답 없음", p.Name, p.Pid), p.Pid));
