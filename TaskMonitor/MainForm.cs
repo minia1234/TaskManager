@@ -107,6 +107,8 @@ internal sealed class MainForm : Form
     private bool _updateStaged;                  // 새 exe를 이미 놓았다. 다시 받지 않는다
     private bool _updateBalloon;                 // 마지막 트레이 알림이 업데이트 알림이다
     private bool _netColumnChecked;
+    private MiniWindow? _mini;
+    private readonly ToolStripMenuItem _miniMenu = new("미니 창 (항상 위)") { CheckOnClick = true };
 
     private int _currentPage = PageProcesses;
     private Snapshot? _last;
@@ -280,6 +282,11 @@ internal sealed class MainForm : Form
             _worker.Start();
             StartWatchdog();
             _ = UpdateLoopAsync();
+            if (_settings.MiniWindow)
+            {
+                SetMiniWindow(true);
+            }
+
             _activateWait = ThreadPool.RegisterWaitForSingleObject(_activate, (_, _) =>
             {
                 try
@@ -316,6 +323,12 @@ internal sealed class MainForm : Form
             }
 
             _closing = true;
+            if (_mini is not null)
+            {
+                _settings.MiniX = _mini.Left;
+                _settings.MiniY = _mini.Top;
+                _mini.Close();
+            }
             _activateWait?.Unregister(null);
             _settings.Save();
             _worker?.Dispose();
@@ -531,6 +544,9 @@ internal sealed class MainForm : Form
         view.DropDownItems.Add(Item("새로 고침", () => _worker?.RequestNow(), Keys.F5));
         view.DropDownItems.Add(Item("열 선택...", ChooseColumns));
         view.DropDownItems.Add(Item("절전을 막는 프로그램...", ShowPowerRequests));
+        _miniMenu.Checked = _settings.MiniWindow;
+        _miniMenu.Click += (_, _) => SetMiniWindow(_miniMenu.Checked);
+        view.DropDownItems.Add(_miniMenu);
         view.DropDownItems.Add(new ToolStripSeparator());
         view.DropDownItems.Add(Item("모두 펼치기", () => _processes.ExpandAll(true)));
         view.DropDownItems.Add(Item("모두 접기", () => _processes.ExpandAll(false)));
@@ -950,6 +966,7 @@ internal sealed class MainForm : Form
             _last = snap;
             _lastPerf = frame.Perf;
             UiStep("화면 반영: 성능", () => _performance.Update(snap, frame.Perf));
+            _mini?.Show(snap, frame.Perf, _worker?.CpuTemperatureC);
             string status = Strings.Fmt("마지막 갱신 {0}   |   프로세스 {1}개", DateTime.Now.ToString("HH:mm:ss"), snap.ProcessCount);
             // 네트워크·FPS 열이 "-"인 이유를 알려 준다. 세션을 못 열었으면 대부분 관리자 권한으로 다시 실행하면 풀린다(파일 메뉴).
             if (EtwLatest.State == EtwState.OpenFailed)
@@ -1480,6 +1497,28 @@ internal sealed class MainForm : Form
         _settings.Save();
         _treeMenu.Checked = tree;
         _worker?.SetTree(tree);
+    }
+
+    private void SetMiniWindow(bool show)
+    {
+        _settings.MiniWindow = show;
+        _miniMenu.Checked = show;
+        AppState.MiniVisible = show;
+        if (show && _mini is null)
+        {
+            _mini = new MiniWindow(RestoreFromTray, () => SetMiniWindow(false));
+            _mini.PlaceAt(_settings.MiniX, _settings.MiniY);
+            _mini.Show();
+        }
+        else if (!show && _mini is not null)
+        {
+            _settings.MiniX = _mini.Left;
+            _settings.MiniY = _mini.Top;
+            _mini.Close();
+            _mini = null;
+        }
+
+        _settings.Save();
     }
 
     private void ShowPowerRequests()

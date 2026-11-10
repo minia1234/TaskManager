@@ -110,7 +110,7 @@ internal sealed class SystemPerf : IDisposable
             while (await timer.WaitForNextTickAsync(token))
             {
                 // 창이 안 보이면 5초마다만 잰다(자원 기록 주기와 같다). 그래프용 매초 측정은 필요 없다.
-                if (AppState.Background && Environment.TickCount64 - lastMeasure < 5000)
+                if (AppState.Background && !AppState.MiniVisible && Environment.TickCount64 - lastMeasure < 5000)
                 {
                     continue;
                 }

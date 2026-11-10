@@ -6,6 +6,8 @@ namespace TaskMonitor;
 internal static class AppState
 {
     public static volatile bool Background;
+    // 미니 창이 떠 있으면 기본 창이 숨어 있어도 성능 값은 매초 잰다.
+    public static volatile bool MiniVisible;
 }
 
 // 백그라운드 데이터 작업자: 프로세스 목록과 표의 행을 만든다. UI 스레드는 완성된 결과(Frame)만 받아서 그린다.
